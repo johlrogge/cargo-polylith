@@ -1,4 +1,5 @@
 pub mod base;
+pub mod check;
 pub mod component;
 pub mod deps;
 pub mod info;

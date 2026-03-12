@@ -59,6 +59,12 @@ pub enum PolylithCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Check workspace structure for violations
+    Check {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

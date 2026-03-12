@@ -2,6 +2,7 @@ use colored::Colorize;
 use serde::Serialize;
 use serde_json::json;
 
+use crate::workspace::check::{Violation, ViolationKind};
 use crate::workspace::model::WorkspaceMap;
 
 pub fn print_info(map: &WorkspaceMap) {
@@ -85,6 +86,26 @@ pub fn print_deps(map: &WorkspaceMap, filter_component: Option<&str>) {
             }
         }
     }
+}
+
+pub fn print_check(violations: &[Violation]) {
+    if violations.is_empty() {
+        println!("{}", "✓ No violations found.".green().bold());
+        return;
+    }
+    println!("{}", format!("{} violation(s) found:", violations.len()).red().bold());
+    for v in violations {
+        let tag = match v.kind {
+            ViolationKind::OrphanComponent => "orphan".yellow().to_string(),
+            ViolationKind::BaseDepOnBase => "base-dep-base".red().to_string(),
+            _ => "missing".red().to_string(),
+        };
+        println!("  [{tag}] {}", v.message);
+    }
+}
+
+pub fn print_check_json(violations: &[Violation]) {
+    println!("{}", serde_json::to_string_pretty(&json!({ "violations": violations })).unwrap());
 }
 
 pub fn print_deps_json(map: &WorkspaceMap, filter_component: Option<&str>) {

@@ -39,6 +39,7 @@ fn main() {
             commands::deps::run(component.as_deref(), json, workspace_root)
         }
         PolylithCommand::Info { json } => commands::info::run(json, workspace_root),
+        PolylithCommand::Check { json } => commands::check::run(json, workspace_root),
     };
 
     if let Err(e) = result {
