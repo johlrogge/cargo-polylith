@@ -65,6 +65,8 @@ pub enum PolylithCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Interactively compose projects (TUI)
+    Edit,
 }
 
 #[derive(Subcommand)]

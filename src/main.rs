@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod output;
 mod scaffold;
+mod tui;
 mod workspace;
 
 use clap::Parser;
@@ -40,6 +41,7 @@ fn main() {
         }
         PolylithCommand::Info { json } => commands::info::run(json, workspace_root),
         PolylithCommand::Check { json } => commands::check::run(json, workspace_root),
+        PolylithCommand::Edit => commands::edit::run(workspace_root),
     };
 
     if let Err(e) = result {
