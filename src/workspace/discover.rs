@@ -144,3 +144,83 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
     projects.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(projects)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn fixture() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/poly-ws")
+    }
+
+    #[test]
+    fn finds_workspace_root_from_subdir() {
+        // Start inside a component subdir — should still find the root.
+        let start = fixture().join("components/logger");
+        let root = find_workspace_root(&start).unwrap();
+        assert_eq!(root, fixture());
+    }
+
+    #[test]
+    fn finds_workspace_root_from_root() {
+        let root = find_workspace_root(&fixture()).unwrap();
+        assert_eq!(root, fixture());
+    }
+
+    #[test]
+    fn builds_workspace_map_components() {
+        let map = build_workspace_map(&fixture()).unwrap();
+        let names: Vec<_> = map.components.iter().map(|b| b.name.as_str()).collect();
+        assert!(names.contains(&"logger"), "logger missing: {names:?}");
+        assert!(names.contains(&"parser"), "parser missing: {names:?}");
+    }
+
+    #[test]
+    fn builds_workspace_map_bases() {
+        let map = build_workspace_map(&fixture()).unwrap();
+        assert_eq!(map.bases.len(), 1);
+        assert_eq!(map.bases[0].name, "cli");
+    }
+
+    #[test]
+    fn builds_workspace_map_projects() {
+        let map = build_workspace_map(&fixture()).unwrap();
+        assert_eq!(map.projects.len(), 1);
+        assert_eq!(map.projects[0].name, "main-project");
+    }
+
+    #[test]
+    fn base_deps_include_components() {
+        let map = build_workspace_map(&fixture()).unwrap();
+        let cli = map.bases.iter().find(|b| b.name == "cli").unwrap();
+        assert!(cli.deps.contains(&"parser".to_string()));
+        assert!(cli.deps.contains(&"logger".to_string()));
+    }
+
+    #[test]
+    fn components_sorted_alphabetically() {
+        let map = build_workspace_map(&fixture()).unwrap();
+        let names: Vec<_> = map.components.iter().map(|b| b.name.as_str()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+    }
+
+    #[test]
+    fn missing_dirs_return_empty() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers=[]\nresolver=\"2\"\n",
+        )
+        .unwrap();
+        let map = build_workspace_map(dir.path()).unwrap();
+        assert!(map.components.is_empty());
+        assert!(map.bases.is_empty());
+        assert!(map.projects.is_empty());
+    }
+}

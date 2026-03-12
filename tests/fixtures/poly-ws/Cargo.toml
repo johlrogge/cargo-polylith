@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "components/logger",
+    "components/parser",
+    "bases/cli",
+]
+resolver = "2"

@@ -39,6 +39,10 @@ path = "tests/integration/init_test.rs"
 name = "new_component_test"
 path = "tests/integration/new_component_test.rs"
 
+[[test]]
+name = "info_deps_test"
+path = "tests/integration/info_deps_test.rs"
+
 [dev-dependencies]
 tempfile = "3.10"
 assert_cmd = "2.0"
