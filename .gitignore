@@ -1,1 +1,4 @@
 /target
+.devenv/
+.devenv.flake.nix
+devenv.lock
