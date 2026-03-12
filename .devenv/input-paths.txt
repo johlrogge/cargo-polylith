@@ -1,0 +1,7 @@
+/home/johlrogge/projects/cargo-polylith/.devenv/flake.json
+/home/johlrogge/projects/cargo-polylith/.devenv.flake.nix
+/home/johlrogge/projects/cargo-polylith/.env
+/home/johlrogge/projects/cargo-polylith/devenv.local.nix
+/home/johlrogge/projects/cargo-polylith/devenv.lock
+/home/johlrogge/projects/cargo-polylith/devenv.nix
+/home/johlrogge/projects/cargo-polylith/devenv.yaml

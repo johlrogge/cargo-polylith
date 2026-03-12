@@ -43,7 +43,12 @@ path = "tests/integration/new_component_test.rs"
 name = "info_deps_test"
 path = "tests/integration/info_deps_test.rs"
 
+[[test]]
+name = "phase3_test"
+path = "tests/integration/phase3_test.rs"
+
 [dev-dependencies]
 tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.0"
+serde_json = "1.0"

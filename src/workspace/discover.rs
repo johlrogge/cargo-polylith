@@ -5,6 +5,27 @@ use cargo_toml::Manifest;
 
 use super::model::{Brick, BrickKind, Project, WorkspaceMap};
 
+/// Resolve the workspace root: use `override_root` if given, otherwise walk
+/// up from `start` searching for a `Cargo.toml` with `[workspace]`.
+pub fn resolve_root(start: &Path, override_root: Option<&Path>) -> Result<PathBuf> {
+    match override_root {
+        Some(p) => {
+            let abs = if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                start.join(p)
+            };
+            anyhow::ensure!(
+                abs.join("Cargo.toml").exists(),
+                "no Cargo.toml found at workspace root '{}'",
+                abs.display()
+            );
+            Ok(abs)
+        }
+        None => find_workspace_root(start),
+    }
+}
+
 /// Walk up from `start` to find the workspace root Cargo.toml (the one with `[workspace]`).
 pub fn find_workspace_root(start: &Path) -> Result<PathBuf> {
     let mut current = start.to_path_buf();

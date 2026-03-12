@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -15,6 +17,10 @@ pub enum CargoCommand {
 
 #[derive(Args)]
 pub struct PolylithArgs {
+    /// Override the workspace root (defaults to walking up from the current directory)
+    #[arg(long, global = true, value_name = "PATH")]
+    pub workspace_root: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: PolylithCommand,
 }
@@ -38,16 +44,16 @@ pub enum PolylithCommand {
         #[command(subcommand)]
         action: ProjectAction,
     },
-    /// Show dependency graph
+    /// Show the dependency graph between bases and components
     Deps {
-        /// Filter to paths including this component
-        #[arg(long)]
+        /// Show only bases that depend on this component
+        #[arg(long, value_name = "NAME")]
         component: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Show workspace info (components, bases, projects)
+    /// Show workspace info: components, bases, and projects
     Info {
         /// Output as JSON
         #[arg(long)]

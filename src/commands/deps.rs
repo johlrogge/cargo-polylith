@@ -1,21 +1,20 @@
 use std::env;
+use std::path::Path;
 
 use anyhow::Result;
 
 use crate::output::table;
-use crate::workspace::{build_workspace_map, find_workspace_root};
+use crate::workspace::{build_workspace_map, resolve_root};
 
-pub fn run(component: Option<&str>, json: bool) -> Result<()> {
+pub fn run(component: Option<&str>, json: bool, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
-    let root = find_workspace_root(&cwd)?;
+    let root = resolve_root(&cwd, workspace_root)?;
     let map = build_workspace_map(&root)?;
 
     if json {
-        // Minimal JSON output — full implementation in Phase 3
-        println!("{{\"bases\": []}}");
-        return Ok(());
+        table::print_deps_json(&map, component);
+    } else {
+        table::print_deps(&map, component);
     }
-
-    table::print_deps(&map, component);
     Ok(())
 }

@@ -1,14 +1,15 @@
 use std::env;
+use std::path::Path;
 
 use anyhow::{bail, Result};
 
 use crate::scaffold;
-use crate::workspace::find_workspace_root;
+use crate::workspace::resolve_root;
 
-pub fn new(name: &str) -> Result<()> {
+pub fn new(name: &str, workspace_root: Option<&Path>) -> Result<()> {
     validate_name(name)?;
     let cwd = env::current_dir()?;
-    let root = find_workspace_root(&cwd)?;
+    let root = resolve_root(&cwd, workspace_root)?;
     scaffold::create_component(&root, name)?;
     println!("Created component '{name}' at components/{name}/");
     Ok(())

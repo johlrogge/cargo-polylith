@@ -2,13 +2,16 @@
 
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BrickKind {
     Component,
     Base,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Brick {
     pub name: String,
     pub kind: BrickKind,
@@ -17,7 +20,7 @@ pub struct Brick {
     pub manifest_path: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Project {
     pub name: String,
     pub path: PathBuf,
@@ -25,7 +28,7 @@ pub struct Project {
     pub patches: Vec<(String, PathBuf)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceMap {
     pub root: PathBuf,
     pub components: Vec<Brick>,
