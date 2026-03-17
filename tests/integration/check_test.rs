@@ -61,10 +61,10 @@ fn check_detects_missing_lib_rs() {
         .stdout(predicate::str::contains("lib.rs"));
 }
 
-// ── missing re-export ─────────────────────────────────────────────────────────
+// ── lib.rs with content but no wildcard → passes ─────────────────────────────
 
 #[test]
-fn check_detects_missing_re_export() {
+fn check_lib_rs_with_explicit_content_passes() {
     let tmp = init_valid_workspace();
 
     let comp = tmp.path().join("components/mycomp");
@@ -73,37 +73,80 @@ fn check_detects_missing_re_export() {
         comp.join("Cargo.toml"),
         "[package]\nname = \"mycomp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
     ).unwrap();
-    // lib.rs exists but has no re-export
-    fs::write(comp.join("src/lib.rs"), "// empty\n").unwrap();
-    fs::write(comp.join("src/mycomp.rs"), "// impl\n").unwrap();
+    // lib.rs with explicit re-exports from a dependency (mdma-style)
+    fs::write(comp.join("src/lib.rs"), "pub use some_dep::{MyType, my_fn};\n").unwrap();
 
+    // Should succeed — lib.rs exists with non-wildcard content
     cargo_polylith()
         .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
         .assert()
-        .failure()
-        .stdout(predicate::str::contains("pub use mycomp::*"));
+        .success();
 }
 
-// ── missing impl file ─────────────────────────────────────────────────────────
+// ── flat lib.rs layout (no impl file) is valid ────────────────────────────────
 
 #[test]
-fn check_detects_missing_impl_file() {
+fn check_flat_lib_rs_without_impl_file_passes() {
     let tmp = init_valid_workspace();
 
-    let comp = tmp.path().join("components/noimpl");
+    let comp = tmp.path().join("components/flatcomp");
     fs::create_dir_all(comp.join("src")).unwrap();
     fs::write(
         comp.join("Cargo.toml"),
-        "[package]\nname = \"noimpl\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "[package]\nname = \"flatcomp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
     ).unwrap();
-    fs::write(comp.join("src/lib.rs"), "mod noimpl;\npub use noimpl::*;\n").unwrap();
-    // Intentionally no src/noimpl.rs
+    // Flat layout: lib.rs IS the implementation, no src/flatcomp.rs needed
+    fs::write(comp.join("src/lib.rs"), "pub struct FlatComp;\n").unwrap();
 
+    // Should succeed — flat lib.rs layout without a named submodule is valid
     cargo_polylith()
         .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
         .assert()
-        .failure()
-        .stdout(predicate::str::contains("noimpl.rs"));
+        .success();
+}
+
+#[test]
+fn check_flat_lib_rs_with_explicit_reexport_passes() {
+    let tmp = init_valid_workspace();
+
+    let comp = tmp.path().join("components/flatcomp");
+    fs::create_dir_all(comp.join("src")).unwrap();
+    fs::write(
+        comp.join("Cargo.toml"),
+        "[package]\nname = \"flatcomp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    ).unwrap();
+    // Flat layout: lib.rs declares types and re-exports them explicitly
+    fs::write(comp.join("src/lib.rs"), "mod flatcomp;\npub use flatcomp::FlatComp;\n").unwrap();
+    fs::write(comp.join("src/flatcomp.rs"), "pub struct FlatComp;\n").unwrap();
+
+    // Should succeed with no hard violations (only orphan warning)
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success();
+}
+
+// ── wildcard re-export is a warning, not an error ─────────────────────────────
+
+#[test]
+fn check_wildcard_reexport_is_warning_not_error() {
+    let tmp = init_valid_workspace();
+
+    let comp = tmp.path().join("components/wildcomp");
+    fs::create_dir_all(comp.join("src")).unwrap();
+    fs::write(
+        comp.join("Cargo.toml"),
+        "[package]\nname = \"wildcomp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    ).unwrap();
+    fs::write(comp.join("src/lib.rs"), "mod wildcomp;\npub use wildcomp::*;\n").unwrap();
+    fs::write(comp.join("src/wildcomp.rs"), "// impl\n").unwrap();
+
+    // Should succeed (exit 0) even with wildcard re-export
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("wildcard"));
 }
 
 // ── missing main.rs ───────────────────────────────────────────────────────────

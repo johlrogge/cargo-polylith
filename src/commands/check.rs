@@ -18,11 +18,12 @@ pub fn run(json: bool, workspace_root: Option<&Path>) -> Result<()> {
         table::print_check(&violations);
     }
 
-    if violations
-        .iter()
-        .any(|v| v.kind != crate::workspace::ViolationKind::OrphanComponent)
-    {
-        // Orphans are warnings; everything else is an error exit.
+    let warning_kinds = [
+        crate::workspace::ViolationKind::OrphanComponent,
+        crate::workspace::ViolationKind::WildcardReExport,
+    ];
+    if violations.iter().any(|v| !warning_kinds.contains(&v.kind)) {
+        // Warnings are exit 0; everything else is an error exit.
         std::process::exit(1);
     }
 

@@ -41,6 +41,7 @@ fn main() {
         }
         PolylithCommand::Info { json } => commands::info::run(json, workspace_root),
         PolylithCommand::Check { json } => commands::check::run(json, workspace_root),
+        PolylithCommand::Status { json } => commands::status::run(json, workspace_root),
         PolylithCommand::Edit => commands::edit::run(workspace_root),
     };
 

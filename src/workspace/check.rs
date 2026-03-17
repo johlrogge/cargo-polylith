@@ -14,8 +14,6 @@ pub struct Violation {
 pub enum ViolationKind {
     /// A component is missing its expected lib.rs re-export file.
     MissingLibRs,
-    /// A component's lib.rs doesn't contain the expected `pub use <name>::*` re-export.
-    MissingReExport,
     /// A component is missing its implementation file (`src/<name>.rs`).
     MissingImplFile,
     /// A base is missing its `src/main.rs`.
@@ -24,6 +22,8 @@ pub enum ViolationKind {
     BaseDepOnBase,
     /// A component is not depended on by any base (potential dead code).
     OrphanComponent,
+    /// A component's lib.rs uses a wildcard re-export (`pub use <name>::*`).
+    WildcardReExport,
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -44,43 +44,42 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
         if !lib_rs.exists() {
             violations.push(Violation {
                 kind: ViolationKind::MissingLibRs,
-                message: format!(
-                    "component '{}': src/lib.rs is missing",
-                    comp.name
-                ),
+                message: format!("component '{}': src/lib.rs is missing", comp.name),
             });
-        } else {
-            let content = std::fs::read_to_string(&lib_rs).unwrap_or_default();
-            let expected = format!("pub use {}::*", comp.name);
-            if !content.contains(&expected) {
+
+            // No lib.rs and no impl file → also flag MissingImplFile
+            let impl_file = comp.path.join("src").join(format!("{}.rs", comp.name));
+            if !impl_file.exists() {
                 violations.push(Violation {
-                    kind: ViolationKind::MissingReExport,
+                    kind: ViolationKind::MissingImplFile,
                     message: format!(
-                        "component '{}': src/lib.rs missing `{};`",
-                        comp.name, expected
+                        "component '{}': src/{}.rs is missing",
+                        comp.name, comp.name
                     ),
                 });
             }
-        }
+        } else {
+            let content = std::fs::read_to_string(&lib_rs).unwrap_or_default();
+            // Rust normalises hyphens to underscores in module/crate names.
+            let rust_name = comp.name.replace('-', "_");
+            let wildcard = format!("pub use {}::*", rust_name);
 
-        let impl_file = comp.path.join("src").join(format!("{}.rs", comp.name));
-        if !impl_file.exists() {
-            violations.push(Violation {
-                kind: ViolationKind::MissingImplFile,
-                message: format!(
-                    "component '{}': src/{}.rs is missing",
-                    comp.name, comp.name
-                ),
-            });
+            if content.contains(&wildcard) {
+                violations.push(Violation {
+                    kind: ViolationKind::WildcardReExport,
+                    message: format!(
+                        "component '{}': lib.rs uses wildcard re-export — consider explicit `pub use {}::{{Type, fn}};`",
+                        comp.name, rust_name
+                    ),
+                });
+            }
+            // If lib.rs exists, any layout (flat, submodule, re-export from deps) is valid.
         }
 
         if !depended_on.contains(comp.name.as_str()) {
             violations.push(Violation {
                 kind: ViolationKind::OrphanComponent,
-                message: format!(
-                    "component '{}' is not used by any base",
-                    comp.name
-                ),
+                message: format!("component '{}' is not used by any base", comp.name),
             });
         }
     }

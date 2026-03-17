@@ -65,6 +65,12 @@ pub enum PolylithCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Show a lenient audit of workspace structure (always exits 0)
+    Status {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Interactively compose projects (TUI)
     Edit,
 }

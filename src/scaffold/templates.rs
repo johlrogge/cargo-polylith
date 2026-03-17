@@ -18,6 +18,8 @@ edition = "2021"
 pub fn component_lib_rs(name: &str) -> String {
     format!(
         r#"mod {name};
+// Declare your public interface explicitly, e.g.:
+// pub use {name}::{{MyType, my_function}};
 pub use {name}::*;
 "#
     )

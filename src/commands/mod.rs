@@ -6,3 +6,4 @@ pub mod edit;
 pub mod info;
 pub mod init;
 pub mod project;
+pub mod status;

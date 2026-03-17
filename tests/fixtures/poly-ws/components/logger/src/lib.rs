@@ -1,2 +1,2 @@
 mod logger;
-pub use logger::*;
+pub use logger::Logger;

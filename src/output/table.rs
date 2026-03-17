@@ -4,6 +4,7 @@ use serde_json::json;
 
 use crate::workspace::check::{Violation, ViolationKind};
 use crate::workspace::model::WorkspaceMap;
+use crate::workspace::status::StatusReport;
 
 pub fn print_info(map: &WorkspaceMap) {
     println!("{}", "Components".bold());
@@ -97,11 +98,65 @@ pub fn print_check(violations: &[Violation]) {
     for v in violations {
         let tag = match v.kind {
             ViolationKind::OrphanComponent => "orphan".yellow().to_string(),
+            ViolationKind::WildcardReExport => "wildcard".yellow().to_string(),
             ViolationKind::BaseDepOnBase => "base-dep-base".red().to_string(),
             _ => "missing".red().to_string(),
         };
         println!("  [{tag}] {}", v.message);
     }
+}
+
+pub fn print_status(report: &StatusReport) {
+    if !report.confirmed.is_empty() {
+        println!("{}", "Confirmed:".green().bold());
+        for item in &report.confirmed {
+            println!("  {} {}", "✓".green(), item);
+        }
+    }
+
+    if !report.divergences.is_empty() {
+        println!("{}", "Divergences (not errors):".yellow().bold());
+        for d in &report.divergences {
+            println!("  {} {}", "~".yellow(), d.observation);
+            println!("    {}", d.suggestion);
+        }
+    }
+
+    if !report.suggestions.is_empty() {
+        println!("{}", "Suggestions:".cyan().bold());
+        for s in &report.suggestions {
+            println!("  {} {}", "→".cyan(), s);
+        }
+    }
+
+    if report.confirmed.is_empty() && report.divergences.is_empty() && report.suggestions.is_empty()
+    {
+        println!("{}", "✓ Workspace looks great.".green().bold());
+    }
+}
+
+pub fn print_status_json(report: &StatusReport) {
+    #[derive(Serialize)]
+    struct DivergenceOut<'a> {
+        observation: &'a str,
+        suggestion: &'a str,
+    }
+    #[derive(Serialize)]
+    struct Out<'a> {
+        confirmed: &'a [String],
+        divergences: Vec<DivergenceOut<'a>>,
+        suggestions: &'a [String],
+    }
+    let out = Out {
+        confirmed: &report.confirmed,
+        divergences: report
+            .divergences
+            .iter()
+            .map(|d| DivergenceOut { observation: &d.observation, suggestion: &d.suggestion })
+            .collect(),
+        suggestions: &report.suggestions,
+    };
+    println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }
 
 pub fn print_check_json(violations: &[Violation]) {
