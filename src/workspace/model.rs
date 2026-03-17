@@ -24,6 +24,7 @@ pub struct Brick {
 pub struct Project {
     pub name: String,
     pub path: PathBuf,
+    pub deps: Vec<String>,
     pub members: Vec<PathBuf>,
     pub patches: Vec<(String, PathBuf)>,
 }

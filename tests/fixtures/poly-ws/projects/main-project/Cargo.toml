@@ -1,8 +1,16 @@
 [workspace]
-members = [
-    "../../bases/cli",
-]
+members = []
 resolver = "2"
 
-# [patch.crates-io]
-# logger = { path = "../../components/logger" }
+[package]
+name = "main-project"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "main-project"
+path = "src/main.rs"
+
+[dependencies]
+cli = { path = "../../bases/cli" }
+logger = { path = "../../components/logger" }

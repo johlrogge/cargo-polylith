@@ -154,10 +154,12 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
                     .collect()
             })
             .unwrap_or_default();
+        let deps = manifest.dependencies.keys().cloned().collect();
         // [patch] tables are not directly exposed by cargo_toml; skip for now.
         projects.push(Project {
             name,
             path: path.clone(),
+            deps,
             members,
             patches: vec![],
         });

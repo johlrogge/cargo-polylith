@@ -59,6 +59,27 @@ fn info_shows_section_headers() {
 // ── deps ──────────────────────────────────────────────────────────────────────
 
 #[test]
+fn deps_shows_project() {
+    cargo_polylith()
+        .args(["polylith", "deps"])
+        .current_dir(fixture_root())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("main-project"))
+        .stdout(predicate::str::contains("(project)"));
+}
+
+#[test]
+fn deps_project_shows_base_dep() {
+    cargo_polylith()
+        .args(["polylith", "deps"])
+        .current_dir(fixture_root())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("cli"));
+}
+
+#[test]
 fn deps_shows_base_and_components() {
     cargo_polylith()
         .args(["polylith", "deps"])

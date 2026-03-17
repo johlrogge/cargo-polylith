@@ -73,6 +73,11 @@ pub fn print_info_json(map: &WorkspaceMap) {
 }
 
 pub fn print_deps(map: &WorkspaceMap, filter_component: Option<&str>) {
+    let component_names: std::collections::HashSet<&str> =
+        map.components.iter().map(|c| c.name.as_str()).collect();
+    let base_names: std::collections::HashSet<&str> =
+        map.bases.iter().map(|b| b.name.as_str()).collect();
+
     for base in &map.bases {
         if let Some(filter) = filter_component {
             if !base.deps.contains(&filter.to_string()) {
@@ -81,8 +86,23 @@ pub fn print_deps(map: &WorkspaceMap, filter_component: Option<&str>) {
         }
         println!("{} (base)", base.name.cyan().bold());
         for dep in &base.deps {
-            let is_component = map.components.iter().any(|c| &c.name == dep);
-            if is_component {
+            if component_names.contains(dep.as_str()) {
+                println!("  └─ {}", dep.green());
+            }
+        }
+    }
+
+    for project in &map.projects {
+        if let Some(filter) = filter_component {
+            if !project.deps.contains(&filter.to_string()) {
+                continue;
+            }
+        }
+        println!("{} (project)", project.name.yellow().bold());
+        for dep in &project.deps {
+            if base_names.contains(dep.as_str()) {
+                println!("  └─ {} (base)", dep.cyan());
+            } else if component_names.contains(dep.as_str()) {
                 println!("  └─ {}", dep.green());
             }
         }
@@ -164,24 +184,36 @@ pub fn print_check_json(violations: &[Violation]) {
 }
 
 pub fn print_deps_json(map: &WorkspaceMap, filter_component: Option<&str>) {
+    let component_names: std::collections::HashSet<&str> =
+        map.components.iter().map(|c| c.name.as_str()).collect();
+    let base_names: std::collections::HashSet<&str> =
+        map.bases.iter().map(|b| b.name.as_str()).collect();
+
     let bases: Vec<_> = map
         .bases
         .iter()
-        .filter(|b| {
-            filter_component
-                .map(|f| b.deps.contains(&f.to_string()))
-                .unwrap_or(true)
-        })
+        .filter(|b| filter_component.map(|f| b.deps.contains(&f.to_string())).unwrap_or(true))
         .map(|b| {
             let component_deps: Vec<&str> = b
                 .deps
                 .iter()
-                .filter(|d| map.components.iter().any(|c| &c.name == *d))
+                .filter(|d| component_names.contains(d.as_str()))
                 .map(|d| d.as_str())
                 .collect();
             json!({ "name": b.name, "component_deps": component_deps })
         })
         .collect();
 
-    println!("{}", serde_json::to_string_pretty(&json!({ "bases": bases })).unwrap());
+    let projects: Vec<_> = map
+        .projects
+        .iter()
+        .filter(|p| filter_component.map(|f| p.deps.contains(&f.to_string())).unwrap_or(true))
+        .map(|p| {
+            let base_deps: Vec<&str> = p.deps.iter().filter(|d| base_names.contains(d.as_str())).map(|d| d.as_str()).collect();
+            let component_deps: Vec<&str> = p.deps.iter().filter(|d| component_names.contains(d.as_str())).map(|d| d.as_str()).collect();
+            json!({ "name": p.name, "base_deps": base_deps, "component_deps": component_deps })
+        })
+        .collect();
+
+    println!("{}", serde_json::to_string_pretty(&json!({ "bases": bases, "projects": projects })).unwrap());
 }
