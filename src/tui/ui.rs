@@ -2,138 +2,196 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
-use super::app::{App, Focus};
+use super::app::{App, RowKind};
 
-pub fn draw(frame: &mut Frame, app: &App) {
+const LABEL_WIDTH: u16 = 24;
+const COL_WIDTH: u16 = 2; // cell char + space
+
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
-
-    // Outer layout: main area + status bar
-    let outer = Layout::default()
+    let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
 
-    draw_main(frame, app, outer[0]);
-    draw_status(frame, app, outer[1]);
+    draw_grid(frame, app, layout[0]);
+    draw_status(frame, app, layout[1]);
 }
 
-fn draw_main(frame: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(area);
+fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
+    let block = Block::default().title(" cargo polylith ").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    draw_projects(frame, app, chunks[0]);
-    draw_bases(frame, app, chunks[1]);
-}
-
-fn draw_projects(frame: &mut Frame, app: &App, area: Rect) {
-    let focused = app.focus == Focus::Projects;
-    let block = Block::default()
-        .title(" Projects ")
-        .borders(Borders::ALL)
-        .border_style(border_style(focused));
-
-    let items: Vec<ListItem> = app
-        .projects
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let marker = if p.modified { "*" } else { " " };
-            let label = format!("{marker} {}", p.name);
-            let style = if i == app.proj_idx && focused {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else if i == app.proj_idx {
-                Style::default().fg(Color::DarkGray)
-            } else {
-                Style::default()
-            };
-            ListItem::new(label).style(style)
-        })
-        .collect();
-
-    let mut state = ListState::default();
-    state.select(Some(app.proj_idx));
-
-    frame.render_stateful_widget(
-        List::new(items).block(block).highlight_symbol("▶ "),
-        area,
-        &mut state,
-    );
-}
-
-fn draw_bases(frame: &mut Frame, app: &App, area: Rect) {
-    let focused = app.focus == Focus::Bases;
-    let title = app
-        .current_project()
-        .map(|p| format!(" Bases — {} ", p.name))
-        .unwrap_or_else(|| " Bases ".into());
-
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(border_style(focused));
-
-    let selections = app
-        .current_project()
-        .map(|p| p.base_selections.as_slice())
-        .unwrap_or(&[]);
-
-    if selections.is_empty() {
+    if app.cols.is_empty() {
         frame.render_widget(
-            Paragraph::new("(no bases in workspace)").block(block),
-            area,
+            Paragraph::new(
+                "No projects found — run: cargo polylith project new <name>",
+            ),
+            inner,
         );
         return;
     }
 
-    let items: Vec<ListItem> = selections
-        .iter()
-        .enumerate()
-        .map(|(i, (name, selected))| {
-            let checkbox = if *selected { "[x]" } else { "[ ]" };
-            let style = if i == app.base_idx && focused {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else if i == app.base_idx {
-                Style::default().fg(Color::DarkGray)
+    if app.rows.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No components or bases found."),
+            inner,
+        );
+        return;
+    }
+
+    let n_components = app.n_components();
+    let n_bases = app.rows.len() - n_components;
+
+    // Header height = longest project name (minimum 1)
+    let header_rows = app.cols.iter().map(|c| c.name.len()).max().unwrap_or(1) as u16;
+
+    // Section header rows: 1 per non-empty section
+    let section_rows: u16 = (if n_components > 0 { 1 } else { 0 })
+        + (if n_bases > 0 { 1 } else { 0 });
+
+    let data_area_h = inner.height.saturating_sub(header_rows + section_rows);
+    let grid_w = inner.width.saturating_sub(LABEL_WIDTH);
+    let visible_cols = (grid_w / COL_WIDTH) as usize;
+    // Conservative: subtract both section headers from visible rows
+    let visible_rows = data_area_h as usize;
+
+    app.scroll_to_cursor(visible_rows.max(1), visible_cols.max(1));
+
+    let scroll_row = app.scroll_row;
+    let scroll_col = app.scroll_col;
+
+    // ── Column headers (project names, written top-to-bottom) ──────────────
+    let vis_cols = visible_cols.min(app.cols.len().saturating_sub(scroll_col));
+    for sc in 0..vis_cols {
+        let col_i = scroll_col + sc;
+        let name = &app.cols[col_i].name;
+        let x = inner.x + LABEL_WIDTH + sc as u16 * COL_WIDTH;
+        let is_cursor_col = col_i == app.cursor_col;
+        let style = if is_cursor_col {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        for hr in 0..header_rows {
+            let y = inner.y + hr;
+            if y >= inner.y + inner.height {
+                break;
+            }
+            let ch = name.chars().nth(hr as usize).unwrap_or(' ').to_string();
+            let buf = frame.buffer_mut();
+            if x < inner.x + inner.width {
+                buf.set_string(x, y, &ch, style);
+            }
+        }
+    }
+
+    // ── Data rows ──────────────────────────────────────────────────────────
+    let mut display_y = inner.y + header_rows;
+    let bottom = inner.y + inner.height;
+
+    for row_i in scroll_row..app.rows.len() {
+        let row_kind = app.rows[row_i].kind;
+
+        // Section header before first component (only when scroll_row is in or before component section)
+        if row_i == scroll_row && row_i < n_components && n_components > 0 {
+            if display_y < bottom {
+                draw_section_header(frame, inner, display_y, "── components");
+                display_y += 1;
+            }
+        }
+
+        // Section header before first base
+        if row_i == n_components && n_bases > 0 {
+            if display_y < bottom {
+                draw_section_header(frame, inner, display_y, "── bases");
+                display_y += 1;
+            }
+        }
+
+        if display_y >= bottom {
+            break;
+        }
+
+        let is_cursor_row = row_i == app.cursor_row;
+
+        // Row label
+        let label = truncate(&app.rows[row_i].name, (LABEL_WIDTH - 1) as usize);
+        let padded = format!("{:<width$}", label, width = (LABEL_WIDTH - 1) as usize);
+        let label_style = match (row_kind, is_cursor_row) {
+            (RowKind::Component, true) => {
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            }
+            (RowKind::Component, false) => Style::default().fg(Color::Green),
+            (RowKind::Base, true) => {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            }
+            (RowKind::Base, false) => Style::default().fg(Color::Cyan),
+        };
+        {
+            let buf = frame.buffer_mut();
+            buf.set_string(inner.x, display_y, &padded, label_style);
+        }
+
+        // Cells
+        for sc in 0..vis_cols {
+            let col_i = scroll_col + sc;
+            let selected = app
+                .cells
+                .get(row_i)
+                .and_then(|r| r.get(col_i))
+                .copied()
+                .unwrap_or(false);
+            let modified = app.modified_cols.get(col_i).copied().unwrap_or(false);
+            let is_cursor = is_cursor_row && col_i == app.cursor_col;
+
+            let ch = if selected { "x" } else { "-" };
+            let style = if is_cursor {
+                Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD)
+            } else if selected {
+                let base = Style::default().fg(Color::Green);
+                if modified { base.add_modifier(Modifier::BOLD) } else { base }
             } else {
-                Style::default()
+                Style::default().fg(Color::DarkGray)
             };
-            let line = Line::from(vec![
-                Span::styled(format!("{checkbox} "), style),
-                Span::styled(name.clone(), style),
-            ]);
-            ListItem::new(line)
-        })
-        .collect();
 
-    let mut state = ListState::default();
-    state.select(Some(app.base_idx));
+            let x = inner.x + LABEL_WIDTH + sc as u16 * COL_WIDTH;
+            if x < inner.x + inner.width {
+                let buf = frame.buffer_mut();
+                buf.set_string(x, display_y, ch, style);
+            }
+        }
 
-    frame.render_stateful_widget(
-        List::new(items).block(block).highlight_symbol("  "),
-        area,
-        &mut state,
-    );
+        display_y += 1;
+    }
+}
+
+fn draw_section_header(frame: &mut Frame, inner: Rect, y: u16, label: &str) {
+    let width = inner.width as usize;
+    // Fill with dashes after the label text, e.g. "── bases ────────────────"
+    let text = format!("{:─<width$}", format!("{} ", label), width = width);
+    let buf = frame.buffer_mut();
+    buf.set_string(inner.x, y, &text, Style::default().fg(Color::DarkGray));
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
-    let style = Style::default().fg(Color::DarkGray);
-    frame.render_widget(Paragraph::new(app.status.as_str()).style(style), area);
+    let cursor_info = app
+        .cols
+        .get(app.cursor_col)
+        .zip(app.rows.get(app.cursor_row))
+        .map(|(col, row)| format!("  [{}/{}]", col.name, row.name))
+        .unwrap_or_default();
+    let text = format!("{}{}", app.status, cursor_info);
+    frame.render_widget(
+        Paragraph::new(text).style(Style::default().fg(Color::DarkGray)),
+        area,
+    );
 }
 
-fn border_style(focused: bool) -> Style {
-    if focused {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    }
+fn truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max { s } else { &s[..max] }
 }

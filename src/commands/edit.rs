@@ -26,7 +26,6 @@ pub fn run(workspace_root: Option<&Path>) -> Result<()> {
 
     let mut app = App::new(&map)?;
 
-    // Set up terminal
     enable_raw_mode().context("enabling raw mode")?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
@@ -36,7 +35,6 @@ pub fn run(workspace_root: Option<&Path>) -> Result<()> {
 
     let result = run_loop(&mut terminal, &mut app);
 
-    // Restore terminal unconditionally
     disable_raw_mode().ok();
     execute!(
         terminal.backend_mut(),
@@ -57,7 +55,6 @@ fn run_loop(
         terminal.draw(|f| ui::draw(f, app))?;
 
         if let Event::Key(key) = event::read()? {
-            // Ignore key-release events on Windows
             if key.kind == KeyEventKind::Release {
                 continue;
             }
@@ -65,10 +62,11 @@ fn run_loop(
                 KeyCode::Char('q') | KeyCode::Esc => {
                     app.quit = true;
                 }
-                KeyCode::Tab => app.toggle_focus(),
                 KeyCode::Up | KeyCode::Char('k') => app.move_up(),
                 KeyCode::Down | KeyCode::Char('j') => app.move_down(),
-                KeyCode::Char(' ') => app.toggle_base(),
+                KeyCode::Left | KeyCode::Char('h') => app.move_left(),
+                KeyCode::Right | KeyCode::Char('l') => app.move_right(),
+                KeyCode::Char(' ') => app.toggle_cell(),
                 KeyCode::Char('w') => {
                     if let Err(e) = app.write_all() {
                         app.status = format!("error: {e:#}");
