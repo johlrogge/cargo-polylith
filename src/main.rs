@@ -1,5 +1,6 @@
 mod cli;
 mod commands;
+mod corsett;
 mod output;
 mod scaffold;
 mod tui;

@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -132,30 +133,47 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
         if !manifest_path.exists() {
             continue;
         }
-        let manifest = Manifest::from_path(&manifest_path)
-            .with_context(|| format!("parsing {}", manifest_path.display()))?;
-        let name = manifest
-            .package
-            .as_ref()
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| {
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            });
-        let members = manifest
-            .workspace
-            .as_ref()
-            .map(|ws| {
-                ws.members
-                    .iter()
-                    .map(|m| path.join(m))
+        let dir_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let content = match fs::read_to_string(&manifest_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("warning: skipping {}: {e}", manifest_path.display());
+                continue;
+            }
+        };
+        let doc: toml_edit::DocumentMut = match content.parse() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("warning: skipping {}: {e}", manifest_path.display());
+                continue;
+            }
+        };
+        let name = doc
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned())
+            .unwrap_or(dir_name);
+        let deps = doc
+            .get("dependencies")
+            .and_then(|t| t.as_table())
+            .map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
+            .unwrap_or_default();
+        let members = doc
+            .get("workspace")
+            .and_then(|ws| ws.get("members"))
+            .and_then(|m| m.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| path.join(s))
                     .collect()
             })
             .unwrap_or_default();
-        let deps = manifest.dependencies.keys().cloned().collect();
-        // [patch] tables are not directly exposed by cargo_toml; skip for now.
         projects.push(Project {
             name,
             path: path.clone(),

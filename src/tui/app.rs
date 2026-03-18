@@ -12,11 +12,16 @@ pub enum RowKind {
     Base,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InputMode {
+    Normal,
+    CreatingProject,
+}
+
 #[derive(Debug, Clone)]
 pub struct GridRow {
     pub name: String,
     pub kind: RowKind,
-    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +41,9 @@ pub struct App {
     pub scroll_col: usize,
     pub status: String,
     pub quit: bool,
+    pub workspace_root: PathBuf,
+    pub input_mode: InputMode,
+    pub input_buffer: String,
 }
 
 impl App {
@@ -43,12 +51,11 @@ impl App {
         let mut rows: Vec<GridRow> = map
             .components
             .iter()
-            .map(|c| GridRow { name: c.name.clone(), kind: RowKind::Component, path: c.path.clone() })
+            .map(|c| GridRow { name: c.name.clone(), kind: RowKind::Component })
             .collect();
         rows.extend(map.bases.iter().map(|b| GridRow {
             name: b.name.clone(),
             kind: RowKind::Base,
-            path: b.path.clone(),
         }));
 
         let cols: Vec<GridCol> = map
@@ -70,9 +77,9 @@ impl App {
         let modified_cols = vec![false; cols.len()];
 
         let status = if cols.is_empty() {
-            "No projects — run: cargo polylith project new <name>".into()
+            "n: new project  q: quit".into()
         } else {
-            "←→↑↓/hjkl: navigate  Space: toggle  w: write  q: quit".into()
+            "←→↑↓/hjkl: navigate  Space: toggle  w: write  n: new project  q: quit".into()
         };
 
         Ok(App {
@@ -86,6 +93,9 @@ impl App {
             scroll_col: 0,
             status,
             quit: false,
+            workspace_root: map.root.clone(),
+            input_mode: InputMode::Normal,
+            input_buffer: String::new(),
         })
     }
 
@@ -142,6 +152,64 @@ impl App {
             self.cells[r][c] = !self.cells[r][c];
             self.modified_cols[c] = true;
         }
+    }
+
+    pub fn start_create_project(&mut self) {
+        self.input_mode = InputMode::CreatingProject;
+        self.input_buffer.clear();
+        self.status = "New project name: ".into();
+    }
+
+    pub fn input_char(&mut self, ch: char) {
+        self.input_buffer.push(ch);
+    }
+
+    pub fn input_backspace(&mut self) {
+        self.input_buffer.pop();
+    }
+
+    pub fn confirm_create_project(&mut self) -> Result<()> {
+        let name = self.input_buffer.trim().to_owned();
+        anyhow::ensure!(!name.is_empty(), "project name cannot be empty");
+        anyhow::ensure!(
+            name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
+            "project name must contain only alphanumeric characters, hyphens, or underscores"
+        );
+
+        let project_dir = self.workspace_root.join("projects").join(&name);
+        fs::create_dir_all(project_dir.join("src"))
+            .with_context(|| format!("creating {}", project_dir.display()))?;
+
+        let cargo_toml = format!(
+            "[workspace]\nresolver = \"2\"\nmembers = []\n\n[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[bin]]\nname = \"{name}\"\npath = \"src/main.rs\"\n\n[dependencies]\n"
+        );
+        fs::write(project_dir.join("Cargo.toml"), &cargo_toml)
+            .with_context(|| format!("writing Cargo.toml for {name}"))?;
+        fs::write(project_dir.join("src/main.rs"), "fn main() {}\n")
+            .with_context(|| format!("writing src/main.rs for {name}"))?;
+
+        let new_col = GridCol { name: name.clone(), path: project_dir };
+        for row_cells in &mut self.cells {
+            row_cells.push(false);
+        }
+        self.modified_cols.push(false);
+        let new_col_idx = self.cols.len();
+        self.cols.push(new_col);
+        self.cursor_col = new_col_idx;
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+        self.status = format!("Created project '{name}'.  ←→↑↓/hjkl: navigate  Space: toggle  w: write  n: new project  q: quit");
+        Ok(())
+    }
+
+    pub fn cancel_input(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+        self.status = if self.cols.is_empty() {
+            "n: new project  q: quit".into()
+        } else {
+            "←→↑↓/hjkl: navigate  Space: toggle  w: write  n: new project  q: quit".into()
+        };
     }
 
     pub fn write_all(&mut self) -> Result<()> {

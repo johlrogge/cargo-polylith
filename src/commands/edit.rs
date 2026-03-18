@@ -10,20 +10,13 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use crate::tui::{app::App, ui};
+use crate::tui::{app::{App, InputMode}, ui};
 use crate::workspace::{build_workspace_map, resolve_root};
 
 pub fn run(workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
     let map = build_workspace_map(&root)?;
-
-    if map.projects.is_empty() {
-        anyhow::bail!(
-            "no projects found — run `cargo polylith project new <name>` first"
-        );
-    }
-
     let mut app = App::new(&map)?;
 
     enable_raw_mode().context("enabling raw mode")?;
@@ -58,21 +51,37 @@ fn run_loop(
             if key.kind == KeyEventKind::Release {
                 continue;
             }
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
-                    app.quit = true;
-                }
-                KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-                KeyCode::Down | KeyCode::Char('j') => app.move_down(),
-                KeyCode::Left | KeyCode::Char('h') => app.move_left(),
-                KeyCode::Right | KeyCode::Char('l') => app.move_right(),
-                KeyCode::Char(' ') => app.toggle_cell(),
-                KeyCode::Char('w') => {
-                    if let Err(e) = app.write_all() {
-                        app.status = format!("error: {e:#}");
+            match app.input_mode {
+                InputMode::CreatingProject => match key.code {
+                    KeyCode::Char(c) => app.input_char(c),
+                    KeyCode::Backspace => app.input_backspace(),
+                    KeyCode::Enter => {
+                        if let Err(e) = app.confirm_create_project() {
+                            app.status = format!("error: {e:#}");
+                            app.input_mode = InputMode::Normal;
+                            app.input_buffer.clear();
+                        }
                     }
-                }
-                _ => {}
+                    KeyCode::Esc => app.cancel_input(),
+                    _ => {}
+                },
+                InputMode::Normal => match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        app.quit = true;
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => app.move_up(),
+                    KeyCode::Down | KeyCode::Char('j') => app.move_down(),
+                    KeyCode::Left | KeyCode::Char('h') => app.move_left(),
+                    KeyCode::Right | KeyCode::Char('l') => app.move_right(),
+                    KeyCode::Char(' ') => app.toggle_cell(),
+                    KeyCode::Char('w') => {
+                        if let Err(e) = app.write_all() {
+                            app.status = format!("error: {e:#}");
+                        }
+                    }
+                    KeyCode::Char('n') => app.start_create_project(),
+                    _ => {}
+                },
             }
         }
 

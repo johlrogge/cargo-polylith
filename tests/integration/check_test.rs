@@ -149,26 +149,49 @@ fn check_wildcard_reexport_is_warning_not_error() {
         .stdout(predicate::str::contains("wildcard"));
 }
 
-// ── missing main.rs ───────────────────────────────────────────────────────────
+// ── base missing lib.rs ───────────────────────────────────────────────────────
 
 #[test]
-fn check_detects_missing_main_rs() {
+fn check_detects_base_missing_lib_rs() {
     let tmp = init_valid_workspace();
 
-    let base = tmp.path().join("bases/nomain");
+    // Base with only main.rs and no lib.rs — should be a hard error
+    let base = tmp.path().join("bases/nolib");
     fs::create_dir_all(base.join("src")).unwrap();
+    fs::write(base.join("src/main.rs"), "fn main(){}\n").unwrap();
     fs::write(
         base.join("Cargo.toml"),
-        "[package]\nname = \"nomain\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
-         [[bin]]\nname = \"nomain\"\npath = \"src/main.rs\"\n",
+        "[package]\nname = \"nolib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
     ).unwrap();
-    // Intentionally no src/main.rs
 
     cargo_polylith()
         .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("main.rs"));
+        .stdout(predicate::str::contains("lib.rs"));
+}
+
+// ── base with main.rs is a warning, not an error ──────────────────────────────
+
+#[test]
+fn check_base_with_main_rs_is_warning() {
+    let tmp = init_valid_workspace();
+
+    // Base with both lib.rs (correct) and main.rs (violation) — warning only, exit 0
+    let base = tmp.path().join("bases/withlib");
+    fs::create_dir_all(base.join("src")).unwrap();
+    fs::write(base.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(base.join("src/main.rs"), "fn main() { withlib::run(); }\n").unwrap();
+    fs::write(
+        base.join("Cargo.toml"),
+        "[package]\nname = \"withlib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("base-has-main"));
 }
 
 // ── base-dep-base ─────────────────────────────────────────────────────────────
@@ -180,21 +203,19 @@ fn check_detects_base_depending_on_base() {
     // base-a
     let ba = tmp.path().join("bases/base_a");
     fs::create_dir_all(ba.join("src")).unwrap();
-    fs::write(ba.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(ba.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
     fs::write(
         ba.join("Cargo.toml"),
-        "[package]\nname = \"base_a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
-         [[bin]]\nname = \"base_a\"\npath = \"src/main.rs\"\n[dependencies]\n",
+        "[package]\nname = \"base_a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\n",
     ).unwrap();
 
     // base-b depends on base-a
     let bb = tmp.path().join("bases/base_b");
     fs::create_dir_all(bb.join("src")).unwrap();
-    fs::write(bb.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(bb.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
     fs::write(
         bb.join("Cargo.toml"),
         "[package]\nname = \"base_b\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
-         [[bin]]\nname = \"base_b\"\npath = \"src/main.rs\"\n\
          [dependencies]\nbase_a = { path = \"../base_a\" }\n",
     ).unwrap();
 
@@ -228,6 +249,105 @@ fn check_orphan_is_warning_not_error() {
         .assert()
         .success()
         .stdout(predicate::str::contains("orphan"));
+}
+
+// ── transitive component usage is not an orphan ───────────────────────────────
+
+#[test]
+fn check_transitive_component_is_not_orphan() {
+    let tmp = init_valid_workspace();
+
+    // leaf-comp: used only by mid-comp, not directly by any base
+    let leaf = tmp.path().join("components/leaf-comp");
+    fs::create_dir_all(leaf.join("src")).unwrap();
+    fs::write(leaf.join("src/lib.rs"), "pub struct Leaf;\n").unwrap();
+    fs::write(
+        leaf.join("Cargo.toml"),
+        "[package]\nname = \"leaf-comp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    ).unwrap();
+
+    // mid-comp: depends on leaf-comp, used directly by base
+    let mid = tmp.path().join("components/mid-comp");
+    fs::create_dir_all(mid.join("src")).unwrap();
+    fs::write(mid.join("src/lib.rs"), "pub struct Mid;\n").unwrap();
+    fs::write(
+        mid.join("Cargo.toml"),
+        "[package]\nname = \"mid-comp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [dependencies]\nleaf-comp = { path = \"../leaf-comp\" }\n",
+    ).unwrap();
+
+    // base: depends on mid-comp only, has lib.rs (correct base layout)
+    let base = tmp.path().join("bases/mybase");
+    fs::create_dir_all(base.join("src")).unwrap();
+    fs::write(base.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        base.join("Cargo.toml"),
+        "[package]\nname = \"mybase\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [dependencies]\nmid-comp = { path = \"../../components/mid-comp\" }\n",
+    ).unwrap();
+
+    // leaf-comp is reachable transitively — no orphan violation expected
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No violations"));
+}
+
+// ── project missing base is a warning ────────────────────────────────────────
+
+#[test]
+fn check_project_missing_base_is_warning() {
+    let tmp = init_valid_workspace();
+
+    // Project with no base dependency
+    let proj = tmp.path().join("projects/standalone");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n\
+         [package]\nname = \"standalone\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"standalone\"\npath = \"src/main.rs\"\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()                                          // warning → exit 0
+        .stdout(predicate::str::contains("no-base"));
+}
+
+#[test]
+fn check_project_with_base_dep_passes() {
+    let tmp = init_valid_workspace();
+
+    // A proper lib base
+    let base = tmp.path().join("bases/mybase");
+    fs::create_dir_all(base.join("src")).unwrap();
+    fs::write(base.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        base.join("Cargo.toml"),
+        "[package]\nname = \"mybase\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    ).unwrap();
+
+    // Project depending on that base
+    let proj = tmp.path().join("projects/wired");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n\
+         [package]\nname = \"wired\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"wired\"\npath = \"src/main.rs\"\n\
+         [dependencies]\nmybase = { path = \"../../bases/mybase\" }\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No violations"));
 }
 
 // ── check --json shows violation kind ────────────────────────────────────────

@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use super::app::{App, RowKind};
+use super::app::{App, InputMode, RowKind};
 
 const LABEL_WIDTH: u16 = 24;
 const COL_WIDTH: u16 = 2; // cell char + space
@@ -26,11 +26,17 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    if app.cols.is_empty() && app.rows.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No projects, components, or bases found.\nPress 'n' to create a new project."),
+            inner,
+        );
+        return;
+    }
+
     if app.cols.is_empty() {
         frame.render_widget(
-            Paragraph::new(
-                "No projects found — run: cargo polylith project new <name>",
-            ),
+            Paragraph::new("No projects found.\nPress 'n' to create a new project."),
             inner,
         );
         return;
@@ -47,17 +53,32 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     let n_components = app.n_components();
     let n_bases = app.rows.len() - n_components;
 
-    // Header height = longest project name (minimum 1)
-    let header_rows = app.cols.iter().map(|c| c.name.len()).max().unwrap_or(1) as u16;
-
     // Section header rows: 1 per non-empty section
     let section_rows: u16 = (if n_components > 0 { 1 } else { 0 })
         + (if n_bases > 0 { 1 } else { 0 });
 
+    // Header shrinks as the user scrolls down — one row of budget removed per
+    // row scrolled — but never below the minimum height needed to keep all
+    // project names unique (the corsett floor).
+    let col_names: Vec<&str> = app.cols.iter().map(|c| c.name.as_str()).collect();
+    let full_header_h = col_names.iter().map(|n| n.chars().count()).max().unwrap_or(1);
+    let min_unique_h = crate::corsett::min_group_height(&col_names);
+    let target_h = full_header_h
+        .saturating_sub(app.scroll_row)
+        .max(min_unique_h);
+
+    let col_display_names = crate::corsett::fit_group(&col_names, target_h);
+
+    // Actual header height = longest display name (may be less than target_h).
+    let header_rows = col_display_names
+        .iter()
+        .map(|n| n.chars().count())
+        .max()
+        .unwrap_or(1) as u16;
+
     let data_area_h = inner.height.saturating_sub(header_rows + section_rows);
     let grid_w = inner.width.saturating_sub(LABEL_WIDTH);
     let visible_cols = (grid_w / COL_WIDTH) as usize;
-    // Conservative: subtract both section headers from visible rows
     let visible_rows = data_area_h as usize;
 
     app.scroll_to_cursor(visible_rows.max(1), visible_cols.max(1));
@@ -69,7 +90,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     let vis_cols = visible_cols.min(app.cols.len().saturating_sub(scroll_col));
     for sc in 0..vis_cols {
         let col_i = scroll_col + sc;
-        let name = &app.cols[col_i].name;
+        let name = &col_display_names[col_i];
         let x = inner.x + LABEL_WIDTH + sc as u16 * COL_WIDTH;
         let is_cursor_col = col_i == app.cursor_col;
         let style = if is_cursor_col {
@@ -179,6 +200,17 @@ fn draw_section_header(frame: &mut Frame, inner: Rect, y: u16, label: &str) {
 }
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
+    if app.input_mode == InputMode::CreatingProject {
+        let text = format!(
+            "New project name: {}█   [Enter to create, Esc to cancel]",
+            app.input_buffer
+        );
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(Color::Yellow)),
+            area,
+        );
+        return;
+    }
     let cursor_info = app
         .cols
         .get(app.cursor_col)
@@ -195,3 +227,4 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max { s } else { &s[..max] }
 }
+

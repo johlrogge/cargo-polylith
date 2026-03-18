@@ -48,11 +48,29 @@ pub fn run_status(map: &WorkspaceMap) -> StatusReport {
     }
 
     // --- component checks ---
-    let depended_on: std::collections::HashSet<&str> = map
+    // Build transitive closure: all components reachable from any base.
+    // A component used only by another component (not directly by a base) is still "used".
+    let comp_deps: std::collections::HashMap<&str, &[String]> = map
+        .components
+        .iter()
+        .map(|c| (c.name.as_str(), c.deps.as_slice()))
+        .collect();
+    let mut depended_on: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut queue: std::collections::VecDeque<&str> = map
         .bases
         .iter()
         .flat_map(|b| b.deps.iter().map(|d| d.as_str()))
+        .chain(map.projects.iter().flat_map(|p| p.deps.iter().map(|d| d.as_str())))
         .collect();
+    while let Some(name) = queue.pop_front() {
+        if depended_on.insert(name) {
+            if let Some(deps) = comp_deps.get(name) {
+                for d in *deps {
+                    queue.push_back(d.as_str());
+                }
+            }
+        }
+    }
 
     let mut explicit_count = 0usize;
 
@@ -92,7 +110,7 @@ pub fn run_status(map: &WorkspaceMap) -> StatusReport {
 
         if !depended_on.contains(comp.name.as_str()) {
             suggestions.push(format!(
-                "component '{}' is not used by any base",
+                "component '{}' is not used by any base or project",
                 comp.name
             ));
         }
@@ -100,6 +118,35 @@ pub fn run_status(map: &WorkspaceMap) -> StatusReport {
 
     if explicit_count > 0 {
         confirmed.push(format!("{} component(s) use explicit re-exports", explicit_count));
+    }
+
+    // --- base structural checks ---
+    for base in &map.bases {
+        let lib_rs  = base.path.join("src/lib.rs");
+        let main_rs = base.path.join("src/main.rs");
+        if !lib_rs.exists() {
+            suggestions.push(format!(
+                "base '{}': src/lib.rs is missing — add a lib.rs exposing a runtime API function",
+                base.name
+            ));
+        }
+        if main_rs.exists() {
+            divergences.push(Divergence {
+                observation: format!("base '{}': has src/main.rs", base.name),
+                suggestion: "move the executable entry point to a project; bases should only expose library functions like `run()`".to_string(),
+            });
+        }
+    }
+
+    // --- project checks ---
+    for project in &map.projects {
+        let has_base_dep = project.deps.iter().any(|d| base_names.contains(d.as_str()));
+        if !has_base_dep {
+            suggestions.push(format!(
+                "project '{}' has no base dependency — polylith projects must include at least one base",
+                project.name
+            ));
+        }
     }
 
     StatusReport { confirmed, divergences, suggestions }
