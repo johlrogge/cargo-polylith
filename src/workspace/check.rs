@@ -37,6 +37,8 @@ pub enum ViolationKind {
     /// Two or more components share the same package name — likely a stub that was named
     /// identically to the real component instead of getting a distinct name.
     DuplicateName,
+    /// A component has no `interface` declared in `[package.metadata.polylith]`.
+    MissingInterface,
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -165,6 +167,20 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
                 message: format!(
                     "package name '{}' is used by {} bricks ({}) — give each a distinct name and declare `[package.metadata.polylith] interface = \"{}\"` on both",
                     name, paths.len(), paths.join(", "), name
+                ),
+            });
+        }
+    }
+
+    // --- missing interface annotation ---
+    for comp in &map.components {
+        if comp.interface.is_none() {
+            violations.push(Violation {
+                kind: ViolationKind::MissingInterface,
+                message: format!(
+                    "component '{}' has no `[package.metadata.polylith] interface = \"...\"` \
+                     declaration — add interface metadata or run `cargo polylith edit` to set it",
+                    comp.name
                 ),
             });
         }
