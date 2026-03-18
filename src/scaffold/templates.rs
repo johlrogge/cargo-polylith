@@ -3,15 +3,10 @@ pub fn cargo_config_toml() -> &'static str {
     "[build]\ntarget-dir = \"target\"\n"
 }
 
-pub fn component_cargo_toml(name: &str) -> String {
+pub fn component_cargo_toml(name: &str, interface: &str) -> String {
     format!(
-        r#"[package]
-name = "{name}"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-"#
+        "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [package.metadata.polylith]\ninterface = \"{interface}\"\n\n[dependencies]\n"
     )
 }
 

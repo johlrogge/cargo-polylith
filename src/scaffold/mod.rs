@@ -32,13 +32,13 @@ pub fn init_workspace(root: &Path) -> Result<Vec<String>> {
 }
 
 /// Create a new component under `<root>/components/<name>/`.
-pub fn create_component(root: &Path, name: &str) -> Result<()> {
+pub fn create_component(root: &Path, name: &str, interface: &str) -> Result<()> {
     let dir = root.join("components").join(name);
     let src = dir.join("src");
     fs::create_dir_all(&src)
         .with_context(|| format!("creating {}", src.display()))?;
 
-    fs::write(dir.join("Cargo.toml"), component_cargo_toml(name))
+    fs::write(dir.join("Cargo.toml"), component_cargo_toml(name, interface))
         .context("writing component Cargo.toml")?;
     fs::write(src.join("lib.rs"), component_lib_rs(name))
         .context("writing lib.rs")?;
@@ -46,6 +46,25 @@ pub fn create_component(root: &Path, name: &str) -> Result<()> {
         .context("writing impl file")?;
 
     add_workspace_member(root, &format!("components/{name}"))?;
+    Ok(())
+}
+
+/// Write or update the `[package.metadata.polylith] interface` key in a component's
+/// `Cargo.toml`. Creates the metadata tables if they don't exist.
+pub fn write_interface_to_toml(component_path: &Path, interface: &str) -> Result<()> {
+    let manifest_path = component_path.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let mut doc: DocumentMut = content.parse().context("parsing Cargo.toml")?;
+    if doc["package"].get("metadata").is_none() {
+        doc["package"]["metadata"] = toml_edit::table();
+    }
+    if doc["package"]["metadata"].get("polylith").is_none() {
+        doc["package"]["metadata"]["polylith"] = toml_edit::table();
+    }
+    doc["package"]["metadata"]["polylith"]["interface"] = toml_edit::value(interface);
+    fs::write(&manifest_path, doc.to_string())
+        .with_context(|| format!("writing {}", manifest_path.display()))?;
     Ok(())
 }
 
