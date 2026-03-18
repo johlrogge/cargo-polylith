@@ -65,6 +65,13 @@ fn run_loop(
                     KeyCode::Esc => app.cancel_input(),
                     _ => {}
                 },
+                InputMode::EditingInterface => match key.code {
+                    KeyCode::Enter => app.confirm_edit_interface(),
+                    KeyCode::Esc => app.cancel_input(),
+                    KeyCode::Char(c) => app.input_char(c),
+                    KeyCode::Backspace => app.input_backspace(),
+                    _ => {}
+                },
                 InputMode::Normal => match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => {
                         app.quit = true;
@@ -80,6 +87,7 @@ fn run_loop(
                         }
                     }
                     KeyCode::Char('n') => app.start_create_project(),
+                    KeyCode::Char('i') => app.start_edit_interface(),
                     _ => {}
                 },
             }

@@ -238,6 +238,17 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         );
         return;
     }
+    if app.input_mode == InputMode::EditingInterface {
+        let text = format!(
+            "Interface name: {}█   [Enter to save, Esc to cancel]",
+            app.input_buffer
+        );
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(Color::Yellow)),
+            area,
+        );
+        return;
+    }
     let cursor_info = app
         .cols
         .get(app.cursor_col)

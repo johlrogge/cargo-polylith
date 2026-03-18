@@ -29,6 +29,7 @@ pub enum DepState {
 pub enum InputMode {
     Normal,
     CreatingProject,
+    EditingInterface,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +37,7 @@ pub struct GridRow {
     pub name: String,
     pub kind: RowKind,
     pub interface: Option<String>,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +51,7 @@ pub struct App {
     pub cols: Vec<GridCol>,
     pub cells: Vec<Vec<DepState>>, // cells[row_idx][col_idx]
     pub modified_cols: Vec<bool>,
+    pub modified_rows: Vec<bool>,
     pub cursor_row: usize,
     pub cursor_col: usize,
     pub scroll_row: usize,
@@ -69,7 +72,12 @@ impl App {
         let mut comp_rows: Vec<GridRow> = map
             .components
             .iter()
-            .map(|c| GridRow { name: c.name.clone(), kind: RowKind::Component, interface: c.interface.clone() })
+            .map(|c| GridRow {
+                name: c.name.clone(),
+                kind: RowKind::Component,
+                interface: c.interface.clone(),
+                path: c.path.clone(),
+            })
             .collect();
         comp_rows.sort_by(|a, b| match (&a.interface, &b.interface) {
             (Some(ai), Some(bi)) => ai.cmp(bi).then(a.name.cmp(&b.name)),
@@ -82,6 +90,7 @@ impl App {
             name: b.name.clone(),
             kind: RowKind::Base,
             interface: None,
+            path: b.path.clone(),
         }));
 
         let cols: Vec<GridCol> = map
@@ -115,11 +124,12 @@ impl App {
         }
 
         let modified_cols = vec![false; n_cols];
+        let modified_rows = vec![false; n_rows];
 
         let status = if cols.is_empty() {
             "n: new project  q: quit".into()
         } else {
-            "←→↑↓/hjkl: navigate  Space: toggle  w: write  n: new project  q: quit".into()
+            "←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit".into()
         };
 
         Ok(App {
@@ -127,6 +137,7 @@ impl App {
             cols,
             cells,
             modified_cols,
+            modified_rows,
             cursor_row: 0,
             cursor_col: 0,
             scroll_row: 0,
@@ -272,7 +283,7 @@ impl App {
         self.cursor_col = new_col_idx;
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
-        self.status = format!("Created project '{name}'.  ←→↑↓/hjkl: navigate  Space: toggle  w: write  n: new project  q: quit");
+        self.status = format!("Created project '{name}'.  ←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit");
         Ok(())
     }
 
@@ -282,8 +293,31 @@ impl App {
         self.status = if self.cols.is_empty() {
             "n: new project  q: quit".into()
         } else {
-            "←→↑↓/hjkl: navigate  Space: toggle  w: write  n: new project  q: quit".into()
+            "←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit".into()
         };
+    }
+
+    pub fn start_edit_interface(&mut self) {
+        let row = &self.rows[self.cursor_row];
+        if row.kind != RowKind::Component {
+            return;
+        }
+        self.input_mode = InputMode::EditingInterface;
+        self.input_buffer = row.interface.clone().unwrap_or_else(|| row.name.clone());
+    }
+
+    pub fn confirm_edit_interface(&mut self) {
+        let iface = self.input_buffer.trim().to_owned();
+        if iface.is_empty() {
+            self.cancel_input();
+            return;
+        }
+        let row_i = self.cursor_row;
+        self.rows[row_i].interface = Some(iface);
+        self.modified_rows[row_i] = true;
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+        self.status = "Interface staged — press w to write.  ←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit".into();
     }
 
     pub fn write_all(&mut self) -> Result<()> {
@@ -298,10 +332,23 @@ impl App {
             self.modified_cols[col_i] = false;
             written += 1;
         }
+        for row_i in 0..self.rows.len() {
+            if !self.modified_rows[row_i] {
+                continue;
+            }
+            if let Some(iface) = self.rows[row_i].interface.clone() {
+                let row_path = self.rows[row_i].path.clone();
+                let row_name = self.rows[row_i].name.clone();
+                crate::scaffold::write_interface_to_toml(&row_path, &iface)
+                    .with_context(|| format!("writing interface for '{row_name}'"))?;
+                self.modified_rows[row_i] = false;
+                written += 1;
+            }
+        }
         self.status = if written == 0 {
             "No changes to write.".into()
         } else {
-            format!("Wrote {written} project(s).")
+            format!("Wrote {written} change(s).")
         };
         Ok(())
     }
