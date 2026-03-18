@@ -34,6 +34,9 @@ pub enum ViolationKind {
     /// Two or more components declare the same interface name but none has a package name
     /// matching the interface — every consumer must `[patch]` explicitly (no default impl).
     AmbiguousInterface,
+    /// Two or more components share the same package name — likely a stub that was named
+    /// identically to the real component instead of getting a distinct name.
+    DuplicateName,
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -137,6 +140,31 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
                 message: format!(
                     "project '{}' has no base dependency — deliverable projects must include at least one base; set `[package.metadata.polylith] test-project = true` to suppress for test/dev projects",
                     project.name
+                ),
+            });
+        }
+    }
+
+    // --- duplicate name checks ---
+    // Two bricks with the same package name means a stub was mis-named. Cargo would
+    // reject both in the same workspace; even if only one is currently a member, the
+    // duplication signals a configuration error.
+    let mut by_name: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+    for brick in map.components.iter().chain(map.bases.iter()) {
+        by_name.entry(brick.name.as_str()).or_default().push(
+            brick.path.strip_prefix(&map.root)
+                .map(|p| p.to_str().unwrap_or("?"))
+                .unwrap_or("?"),
+        );
+    }
+    for (name, paths) in &by_name {
+        if paths.len() > 1 {
+            violations.push(Violation {
+                kind: ViolationKind::DuplicateName,
+                message: format!(
+                    "package name '{}' is used by {} bricks ({}) — give each a distinct name and declare `[package.metadata.polylith] interface = \"{}\"` on both",
+                    name, paths.len(), paths.join(", "), name
                 ),
             });
         }

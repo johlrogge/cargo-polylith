@@ -378,6 +378,30 @@ fn check_json_shows_violation_kind() {
     assert!(violations.iter().any(|v| v["kind"] == "missing_lib_rs"), "{violations:?}");
 }
 
+// ── duplicate package name is a warning ──────────────────────────────────────
+
+#[test]
+fn check_duplicate_component_name_is_warning() {
+    let tmp = init_valid_workspace();
+
+    for dir in &["components/my-svc", "components/my-svc-wrong"] {
+        let comp = tmp.path().join(dir);
+        fs::create_dir_all(comp.join("src")).unwrap();
+        fs::write(comp.join("src/lib.rs"), "pub struct Svc;\n").unwrap();
+        // Both use the same package name — simulates a mis-named stub
+        fs::write(
+            comp.join("Cargo.toml"),
+            "[package]\nname=\"my-svc\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        ).unwrap();
+    }
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()  // warning → exit 0
+        .stdout(predicate::str::contains("duplicate-name"));
+}
+
 // ── test-project marker suppresses no-base ───────────────────────────────────
 
 #[test]
