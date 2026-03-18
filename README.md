@@ -267,6 +267,7 @@ cargo polylith check
 | `no-base` | A project has no base dependency — suppress with `[package.metadata.polylith] test-project = true` for test/dev projects |
 | `not-in-workspace` | A component or base exists in its directory but is not listed in root workspace members |
 | `ambiguous-interface` | Two or more components declare the same interface name but none has the default package name — every consumer must `[patch]` explicitly |
+| `duplicate-name` | Two or more components share the same package name — rename the stub and declare `interface` metadata on both |
 
 Flags:
 - `--json` — machine-readable output (`{"violations": [...]}`)
