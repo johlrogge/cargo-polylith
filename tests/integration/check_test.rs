@@ -378,17 +378,117 @@ fn check_json_shows_violation_kind() {
     assert!(violations.iter().any(|v| v["kind"] == "missing_lib_rs"), "{violations:?}");
 }
 
+// ── patch substitution suppresses orphan ─────────────────────────────────────
+
+#[test]
+fn check_patch_substitutes_dep_for_orphan_check() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+    ).unwrap();
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
+
+    // Real component — declared as dep but patched away by the project
+    let real = tmp.path().join("components/my-svc");
+    fs::create_dir_all(real.join("src")).unwrap();
+    fs::write(real.join("src/lib.rs"), "pub struct MySvc;\n").unwrap();
+    fs::write(
+        real.join("Cargo.toml"),
+        "[package]\nname=\"my-svc\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    ).unwrap();
+
+    // Stub — different package name, used via [patch.crates-io]
+    let stub = tmp.path().join("components/my-svc-stub");
+    fs::create_dir_all(stub.join("src")).unwrap();
+    fs::write(stub.join("src/lib.rs"), "pub struct MySvc;\n").unwrap();
+    fs::write(
+        stub.join("Cargo.toml"),
+        "[package]\nname=\"my-svc-stub\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    ).unwrap();
+
+    // Base (so we have at least one base)
+    let base = tmp.path().join("bases/cli");
+    fs::create_dir_all(base.join("src")).unwrap();
+    fs::write(base.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        base.join("Cargo.toml"),
+        "[package]\nname=\"cli\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    ).unwrap();
+
+    // Project that patches my-svc → stub
+    let proj = tmp.path().join("projects/bdd");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/lib.rs"), "// tests\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[workspace]\nmembers = [\".\"]\nresolver = \"2\"\n\
+         [package]\nname=\"bdd\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
+         [dependencies]\nmy-svc = \"0.1\"\n\
+         [patch.crates-io]\n\
+         my-svc = { path = \"../../components/my-svc-stub\", package = \"my-svc-stub\" }\n",
+    ).unwrap();
+
+    // my-svc-stub is used via patch — it should NOT be flagged as an orphan
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("my-svc-stub").not());
+}
+
 // ── helper ────────────────────────────────────────────────────────────────────
 
 /// Create a minimal but structurally valid workspace (no components/bases so no violations).
+/// Uses wildcard members so any component/base added by a test is automatically covered.
 fn init_valid_workspace() -> TempDir {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
     ).unwrap();
     for d in &["components", "bases", "projects"] {
         fs::create_dir(tmp.path().join(d)).unwrap();
     }
     tmp
+}
+
+// ── not-in-workspace-members (warning, not error) ─────────────────────────────
+
+#[test]
+fn check_component_not_in_workspace_members_is_warning() {
+    let tmp = TempDir::new().unwrap();
+    // Workspace lists only bases/cli explicitly — no components wildcard
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"bases/cli\"]\nresolver = \"2\"\n",
+    ).unwrap();
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
+
+    let base = tmp.path().join("bases/cli");
+    fs::create_dir_all(base.join("src")).unwrap();
+    fs::write(base.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        base.join("Cargo.toml"),
+        "[package]\nname=\"cli\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    ).unwrap();
+
+    // Component exists on disk but is NOT listed in members
+    let comp = tmp.path().join("components/ghost");
+    fs::create_dir_all(comp.join("src")).unwrap();
+    fs::write(comp.join("src/lib.rs"), "pub struct Ghost;\n").unwrap();
+    fs::write(
+        comp.join("Cargo.toml"),
+        "[package]\nname=\"ghost\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()  // warning → exit 0
+        .stdout(predicate::str::contains("not-in-workspace"));
 }

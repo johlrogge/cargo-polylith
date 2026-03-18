@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use super::app::{App, InputMode, RowKind};
+use super::app::{App, DepState, InputMode, RowKind};
 
 const LABEL_WIDTH: u16 = 24;
 const COL_WIDTH: u16 = 2; // cell char + space
@@ -161,23 +161,31 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         // Cells
         for sc in 0..vis_cols {
             let col_i = scroll_col + sc;
-            let selected = app
+            let dep_state = app
                 .cells
                 .get(row_i)
                 .and_then(|r| r.get(col_i))
                 .copied()
-                .unwrap_or(false);
+                .unwrap_or(DepState::None);
             let modified = app.modified_cols.get(col_i).copied().unwrap_or(false);
             let is_cursor = is_cursor_row && col_i == app.cursor_col;
 
-            let ch = if selected { "x" } else { "-" };
+            let ch = match dep_state {
+                DepState::Direct => "x",
+                DepState::Transitive => "·",
+                DepState::None => "-",
+            };
             let style = if is_cursor {
                 Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD)
-            } else if selected {
-                let base = Style::default().fg(Color::Green);
-                if modified { base.add_modifier(Modifier::BOLD) } else { base }
             } else {
-                Style::default().fg(Color::DarkGray)
+                match dep_state {
+                    DepState::Direct => {
+                        let base = Style::default().fg(Color::Green);
+                        if modified { base.add_modifier(Modifier::BOLD) } else { base }
+                    }
+                    DepState::Transitive => Style::default().fg(Color::Gray),
+                    DepState::None => Style::default().fg(Color::DarkGray),
+                }
             };
 
             let x = inner.x + LABEL_WIDTH + sc as u16 * COL_WIDTH;

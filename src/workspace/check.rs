@@ -28,6 +28,9 @@ pub enum ViolationKind {
     WildcardReExport,
     /// A project has no dependency on any base.
     ProjectMissingBase,
+    /// A component or base exists in its polylith directory but is not listed in the root
+    /// workspace members, so `cargo build --workspace` will silently ignore it.
+    NotInRootWorkspace,
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -48,7 +51,23 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
         .bases
         .iter()
         .flat_map(|b| b.deps.iter().map(|d| d.as_str()))
-        .chain(map.projects.iter().flat_map(|p| p.deps.iter().map(|d| d.as_str())))
+        .chain(map.projects.iter().flat_map(|p| {
+            p.deps.iter().map(|dep_name| {
+                // If this dep is replaced by a patch, seed the BFS with the patched
+                // component's name so the stub is counted as reachable (not orphaned).
+                p.patches
+                    .iter()
+                    .find(|(patched_dep, _)| patched_dep == dep_name)
+                    .and_then(|(_, patch_path)| {
+                        map.components
+                            .iter()
+                            .chain(map.bases.iter())
+                            .find(|brick| brick.path == *patch_path)
+                            .map(|brick| brick.name.as_str())
+                    })
+                    .unwrap_or(dep_name.as_str())
+            })
+        }))
         .collect();
     while let Some(name) = queue.pop_front() {
         if depended_on.insert(name) {
@@ -107,16 +126,46 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
     }
 
     // --- project checks ---
+    // NOTE: polylith distinguishes deliverable projects (require a base) from
+    // development/test projects (no base needed). The tool currently cannot
+    // tell them apart, so it warns on all base-free projects. A future
+    // improvement: honour `[package.metadata.polylith] test-project = true`
+    // to suppress this warning for test/dev projects.
     for project in &map.projects {
         let has_base_dep = project.deps.iter().any(|d| base_names.contains(d.as_str()));
         if !has_base_dep {
             violations.push(Violation {
                 kind: ViolationKind::ProjectMissingBase,
                 message: format!(
-                    "project '{}' has no base dependency — polylith projects must include at least one base",
+                    "project '{}' has no base dependency — deliverable projects must include at least one base (test/dev projects may ignore this)",
                     project.name
                 ),
             });
+        }
+    }
+
+    // --- workspace membership checks ---
+    if !map.root_members.is_empty() {
+        for brick in map.components.iter().chain(map.bases.iter()) {
+            let rel = brick
+                .path
+                .strip_prefix(&map.root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if !map.root_members.iter().any(|m| member_covers(m, &rel)) {
+                let kind_label = match brick.kind {
+                    super::model::BrickKind::Component => "component",
+                    super::model::BrickKind::Base => "base",
+                };
+                violations.push(Violation {
+                    kind: ViolationKind::NotInRootWorkspace,
+                    message: format!(
+                        "{kind_label} '{}' is not listed in root workspace members \
+                         — add '{rel}' to [workspace] members in Cargo.toml",
+                        brick.name
+                    ),
+                });
+            }
         }
     }
 
@@ -159,4 +208,21 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
     }
 
     violations
+}
+
+/// Returns true if `pattern` (a root workspace members entry) covers `rel_path`
+/// (a path relative to the workspace root, using `/` separators).
+///
+/// Handles the two common forms:
+/// - `"components/*"` — matches any direct child of `components/`
+/// - `"components/foo"` — exact match
+fn member_covers(pattern: &str, rel_path: &str) -> bool {
+    if let Some(prefix) = pattern.strip_suffix("/*") {
+        rel_path
+            .strip_prefix(&format!("{prefix}/"))
+            .map(|rest| !rest.contains('/'))
+            .unwrap_or(false)
+    } else {
+        rel_path == pattern
+    }
 }

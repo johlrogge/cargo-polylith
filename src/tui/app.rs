@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,18 @@ use crate::workspace::model::WorkspaceMap;
 pub enum RowKind {
     Component,
     Base,
+}
+
+/// Whether a row (component/base) is a direct, transitive, or absent dependency
+/// of a given project column.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DepState {
+    /// Not a dependency.
+    None,
+    /// Pulled in transitively through another component — read-only in the editor.
+    Transitive,
+    /// Listed directly in the project's `[dependencies]`.
+    Direct,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,7 +46,7 @@ pub struct GridCol {
 pub struct App {
     pub rows: Vec<GridRow>,
     pub cols: Vec<GridCol>,
-    pub cells: Vec<Vec<bool>>, // cells[row_idx][col_idx]
+    pub cells: Vec<Vec<DepState>>, // cells[row_idx][col_idx]
     pub modified_cols: Vec<bool>,
     pub cursor_row: usize,
     pub cursor_col: usize,
@@ -44,6 +57,8 @@ pub struct App {
     pub workspace_root: PathBuf,
     pub input_mode: InputMode,
     pub input_buffer: String,
+    /// Component dependency graph — used to recompute transitive states on toggle.
+    comp_deps: HashMap<String, Vec<String>>,
 }
 
 impl App {
@@ -64,17 +79,31 @@ impl App {
             .map(|p| GridCol { name: p.name.clone(), path: p.path.clone() })
             .collect();
 
-        let cells: Vec<Vec<bool>> = rows
+        let comp_deps: HashMap<String, Vec<String>> = map
+            .components
             .iter()
-            .map(|row| {
-                map.projects
-                    .iter()
-                    .map(|p| p.deps.iter().any(|d| d == &row.name))
-                    .collect()
-            })
+            .map(|c| (c.name.clone(), c.deps.clone()))
             .collect();
 
-        let modified_cols = vec![false; cols.len()];
+        // Build cells: compute direct and transitive deps per project column.
+        let n_rows = rows.len();
+        let n_cols = cols.len();
+        let mut cells = vec![vec![DepState::None; n_cols]; n_rows];
+        for (col_i, project) in map.projects.iter().enumerate() {
+            let direct: HashSet<String> = project.deps.iter().cloned().collect();
+            let transitive = compute_transitive(&direct, &comp_deps);
+            for (row_i, row) in rows.iter().enumerate() {
+                cells[row_i][col_i] = if direct.contains(&row.name) {
+                    DepState::Direct
+                } else if transitive.contains(&row.name) {
+                    DepState::Transitive
+                } else {
+                    DepState::None
+                };
+            }
+        }
+
+        let modified_cols = vec![false; n_cols];
 
         let status = if cols.is_empty() {
             "n: new project  q: quit".into()
@@ -96,6 +125,7 @@ impl App {
             workspace_root: map.root.clone(),
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
+            comp_deps,
         })
     }
 
@@ -149,8 +179,41 @@ impl App {
         let r = self.cursor_row;
         let c = self.cursor_col;
         if r < self.rows.len() && c < self.cols.len() {
-            self.cells[r][c] = !self.cells[r][c];
-            self.modified_cols[c] = true;
+            match self.cells[r][c] {
+                DepState::Direct => {
+                    self.cells[r][c] = DepState::None;
+                    self.modified_cols[c] = true;
+                    self.recompute_transitive(c);
+                }
+                DepState::None => {
+                    self.cells[r][c] = DepState::Direct;
+                    self.modified_cols[c] = true;
+                    self.recompute_transitive(c);
+                }
+                DepState::Transitive => {
+                    // Transitive deps are read-only — toggle the parent instead.
+                }
+            }
+        }
+    }
+
+    fn recompute_transitive(&mut self, col_i: usize) {
+        let direct: HashSet<String> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(row_i, _)| self.cells[*row_i][col_i] == DepState::Direct)
+            .map(|(_, row)| row.name.clone())
+            .collect();
+        let transitive = compute_transitive(&direct, &self.comp_deps);
+        for (row_i, row) in self.rows.iter().enumerate() {
+            if self.cells[row_i][col_i] != DepState::Direct {
+                self.cells[row_i][col_i] = if transitive.contains(&row.name) {
+                    DepState::Transitive
+                } else {
+                    DepState::None
+                };
+            }
         }
     }
 
@@ -190,7 +253,7 @@ impl App {
 
         let new_col = GridCol { name: name.clone(), path: project_dir };
         for row_cells in &mut self.cells {
-            row_cells.push(false);
+            row_cells.push(DepState::None);
         }
         self.modified_cols.push(false);
         let new_col_idx = self.cols.len();
@@ -233,12 +296,12 @@ impl App {
     }
 }
 
-/// Update `[dependencies]` in the project's Cargo.toml: add path deps for selected
+/// Update `[dependencies]` in the project's Cargo.toml: add path deps for direct-dep
 /// rows, remove brick path deps for deselected rows, leave external deps untouched.
 fn write_project_deps(
     project_path: &Path,
     rows: &[GridRow],
-    cells: &[Vec<bool>],
+    cells: &[Vec<DepState>],
     col_i: usize,
 ) -> Result<()> {
     let manifest_path = project_path.join("Cargo.toml");
@@ -252,7 +315,11 @@ fn write_project_deps(
     let deps = doc["dependencies"].as_table_mut().context("[dependencies] is not a table")?;
 
     for (row_i, row) in rows.iter().enumerate() {
-        let selected = cells.get(row_i).and_then(|r| r.get(col_i)).copied().unwrap_or(false);
+        let selected = cells
+            .get(row_i)
+            .and_then(|r| r.get(col_i))
+            .map(|&s| s == DepState::Direct)
+            .unwrap_or(false);
         let dep_key = &row.name;
 
         if selected {
@@ -305,4 +372,27 @@ fn is_brick_dep(deps: &toml_edit::Table, name: &str) -> bool {
         .as_deref()
         .map(|p| p.contains("/components/") || p.contains("/bases/"))
         .unwrap_or(false)
+}
+
+/// BFS from `direct` through `comp_deps`, returning all transitively reachable
+/// names that are NOT in `direct` itself.
+fn compute_transitive(
+    direct: &HashSet<String>,
+    comp_deps: &HashMap<String, Vec<String>>,
+) -> HashSet<String> {
+    let mut reachable: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = direct.iter().cloned().collect();
+    while let Some(name) = queue.pop_front() {
+        if reachable.insert(name.clone()) {
+            if let Some(deps) = comp_deps.get(&name) {
+                for d in deps {
+                    if !reachable.contains(d) {
+                        queue.push_back(d.clone());
+                    }
+                }
+            }
+        }
+    }
+    reachable.retain(|n| !direct.contains(n));
+    reachable
 }

@@ -53,11 +53,19 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
     let components = scan_bricks(root, BrickKind::Component)?;
     let bases = scan_bricks(root, BrickKind::Base)?;
     let projects = scan_projects(root)?;
+    let root_members = {
+        let manifest = Manifest::from_path(&root.join("Cargo.toml"))
+            .with_context(|| format!("failed to parse {}", root.join("Cargo.toml").display()))?;
+        manifest.workspace
+            .map(|ws| ws.members)
+            .unwrap_or_default()
+    };
     Ok(WorkspaceMap {
         root: root.to_path_buf(),
         components,
         bases,
         projects,
+        root_members,
     })
 }
 
@@ -174,12 +182,38 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
                     .collect()
             })
             .unwrap_or_default();
+        let patches: Vec<(String, PathBuf)> = doc
+            .get("patch")
+            .and_then(|p| p.get("crates-io"))
+            .and_then(|ci| ci.as_table())
+            .map(|t| {
+                t.iter()
+                    .filter_map(|(dep_name, item)| {
+                        // path = "..." may be in an inline table or a regular table
+                        let rel = item
+                            .as_value()
+                            .and_then(|v| v.as_inline_table())
+                            .and_then(|t| t.get("path"))
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                item.as_table()
+                                    .and_then(|t| t.get("path"))
+                                    .and_then(|v| v.as_value())
+                                    .and_then(|v| v.as_str())
+                            })?;
+                        let abs = path.join(rel);
+                        let canonical = std::fs::canonicalize(&abs).ok()?;
+                        Some((dep_name.to_string(), canonical))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         projects.push(Project {
             name,
             path: path.clone(),
             deps,
             members,
-            patches: vec![],
+            patches,
         });
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));

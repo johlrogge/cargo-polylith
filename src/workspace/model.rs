@@ -35,4 +35,7 @@ pub struct WorkspaceMap {
     pub components: Vec<Brick>,
     pub bases: Vec<Brick>,
     pub projects: Vec<Project>,
+    /// Raw member patterns from the root `[workspace] members = [...]`.
+    /// Empty if the root Cargo.toml has no members list.
+    pub root_members: Vec<String>,
 }

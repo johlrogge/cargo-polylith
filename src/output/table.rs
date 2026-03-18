@@ -121,6 +121,7 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::WildcardReExport     => "wildcard".yellow().to_string(),
             ViolationKind::BaseHasMainRs        => "base-has-main".yellow().to_string(),
             ViolationKind::ProjectMissingBase   => "no-base".yellow().to_string(),
+            ViolationKind::NotInRootWorkspace   => "not-in-workspace".yellow().to_string(),
             ViolationKind::BaseDepOnBase        => "base-dep-base".red().to_string(),
             ViolationKind::BaseMissingLibRs     => "missing-lib".red().to_string(),
             _                                   => "missing".red().to_string(),
