@@ -263,7 +263,8 @@ fn check_transitive_component_is_not_orphan() {
     fs::write(leaf.join("src/lib.rs"), "pub struct Leaf;\n").unwrap();
     fs::write(
         leaf.join("Cargo.toml"),
-        "[package]\nname = \"leaf-comp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        "[package]\nname = \"leaf-comp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [package.metadata.polylith]\ninterface = \"leaf-comp\"\n",
     ).unwrap();
 
     // mid-comp: depends on leaf-comp, used directly by base
@@ -273,6 +274,7 @@ fn check_transitive_component_is_not_orphan() {
     fs::write(
         mid.join("Cargo.toml"),
         "[package]\nname = \"mid-comp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [package.metadata.polylith]\ninterface = \"mid-comp\"\n\
          [dependencies]\nleaf-comp = { path = \"../leaf-comp\" }\n",
     ).unwrap();
 
@@ -376,6 +378,47 @@ fn check_json_shows_violation_kind() {
     let violations = parsed["violations"].as_array().unwrap();
     assert!(!violations.is_empty());
     assert!(violations.iter().any(|v| v["kind"] == "missing_lib_rs"), "{violations:?}");
+}
+
+// ── missing interface annotation on stub-named component ─────────────────────
+
+#[test]
+fn check_stub_without_interface_annotation_is_warning() {
+    let tmp = init_valid_workspace();
+
+    let comp = tmp.path().join("components/my-svc-stub");
+    fs::create_dir_all(comp.join("src")).unwrap();
+    fs::write(comp.join("src/lib.rs"), "pub struct MySvc;\n").unwrap();
+    fs::write(
+        comp.join("Cargo.toml"),
+        "[package]\nname=\"my-svc-stub\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()  // warning → exit 0
+        .stdout(predicate::str::contains("missing-interface"));
+}
+
+#[test]
+fn check_stub_with_interface_annotation_passes() {
+    let tmp = init_valid_workspace();
+
+    let comp = tmp.path().join("components/my-svc-stub");
+    fs::create_dir_all(comp.join("src")).unwrap();
+    fs::write(comp.join("src/lib.rs"), "pub struct MySvc;\n").unwrap();
+    fs::write(
+        comp.join("Cargo.toml"),
+        "[package]\nname=\"my-svc-stub\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
+         [package.metadata.polylith]\ninterface = \"my-svc\"\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("missing-interface").not());
 }
 
 // ── duplicate package name is a warning ──────────────────────────────────────
@@ -505,7 +548,8 @@ fn check_patch_substitutes_dep_for_orphan_check() {
     fs::write(stub.join("src/lib.rs"), "pub struct MySvc;\n").unwrap();
     fs::write(
         stub.join("Cargo.toml"),
-        "[package]\nname=\"my-svc-stub\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
+        "[package]\nname=\"my-svc-stub\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
+         [package.metadata.polylith]\ninterface = \"my-svc\"\n",
     ).unwrap();
 
     // Base (so we have at least one base)
