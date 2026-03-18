@@ -24,6 +24,7 @@ pub fn run(json: bool, workspace_root: Option<&Path>) -> Result<()> {
         crate::workspace::ViolationKind::BaseHasMainRs,
         crate::workspace::ViolationKind::ProjectMissingBase,
         crate::workspace::ViolationKind::NotInRootWorkspace,
+        crate::workspace::ViolationKind::AmbiguousInterface,
     ];
     if violations.iter().any(|v| !warning_kinds.contains(&v.kind)) {
         // Warnings are exit 0; everything else is an error exit.

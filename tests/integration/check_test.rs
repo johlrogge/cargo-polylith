@@ -378,6 +378,81 @@ fn check_json_shows_violation_kind() {
     assert!(violations.iter().any(|v| v["kind"] == "missing_lib_rs"), "{violations:?}");
 }
 
+// ── test-project marker suppresses no-base ───────────────────────────────────
+
+#[test]
+fn check_test_project_marker_suppresses_no_base() {
+    let tmp = init_valid_workspace();
+
+    let proj = tmp.path().join("projects/bdd");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/lib.rs"), "// tests\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[workspace]\nmembers = [\".\"]\nresolver = \"2\"\n\
+         [package]\nname=\"bdd\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
+         [package.metadata.polylith]\ntest-project = true\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no-base").not());
+}
+
+// ── ambiguous interface warning ───────────────────────────────────────────────
+
+#[test]
+fn check_ambiguous_interface_when_no_default_impl() {
+    let tmp = init_valid_workspace();
+
+    // Two components implementing "audio-output" — neither is named "audio-output"
+    for (dir, pkg) in &[("audio_output_pipewire", "audio-output-pipewire"), ("audio_output_alsa", "audio-output-alsa")] {
+        let comp = tmp.path().join(format!("components/{dir}"));
+        fs::create_dir_all(comp.join("src")).unwrap();
+        fs::write(comp.join("src/lib.rs"), "pub struct Out;\n").unwrap();
+        fs::write(
+            comp.join("Cargo.toml"),
+            format!(
+                "[package]\nname=\"{pkg}\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
+                 [package.metadata.polylith]\ninterface = \"audio-output\"\n"
+            ),
+        ).unwrap();
+    }
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()  // warning → exit 0
+        .stdout(predicate::str::contains("ambiguous-interface"));
+}
+
+#[test]
+fn check_no_ambiguous_interface_when_default_impl_exists() {
+    let tmp = init_valid_workspace();
+
+    // "audio-output" (default) + "audio-output-stub" — the default exists, no warning
+    for (dir, pkg) in &[("audio_output", "audio-output"), ("audio_output_stub", "audio-output-stub")] {
+        let comp = tmp.path().join(format!("components/{dir}"));
+        fs::create_dir_all(comp.join("src")).unwrap();
+        fs::write(comp.join("src/lib.rs"), "pub struct Out;\n").unwrap();
+        fs::write(
+            comp.join("Cargo.toml"),
+            format!(
+                "[package]\nname=\"{pkg}\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
+                 [package.metadata.polylith]\ninterface = \"audio-output\"\n"
+            ),
+        ).unwrap();
+    }
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ambiguous-interface").not());
+}
+
 // ── patch substitution suppresses orphan ─────────────────────────────────────
 
 #[test]

@@ -18,6 +18,8 @@ pub struct Brick {
     pub path: PathBuf,
     pub deps: Vec<String>,
     pub manifest_path: PathBuf,
+    /// Value of `[package.metadata.polylith] interface = "..."`, if present.
+    pub interface: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,6 +29,8 @@ pub struct Project {
     pub deps: Vec<String>,
     pub members: Vec<PathBuf>,
     pub patches: Vec<(String, PathBuf)>,
+    /// True when `[package.metadata.polylith] test-project = true` — suppresses `no-base` warning.
+    pub test_project: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

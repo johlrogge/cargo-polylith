@@ -111,12 +111,24 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
             .keys()
             .cloned()
             .collect();
+        let interface = fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|s| s.parse::<toml_edit::DocumentMut>().ok())
+            .and_then(|doc| {
+                doc.get("package")
+                    .and_then(|p| p.get("metadata"))
+                    .and_then(|m| m.get("polylith"))
+                    .and_then(|p| p.get("interface"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
         bricks.push(Brick {
             name,
             kind: kind.clone(),
             path: path.clone(),
             deps,
             manifest_path,
+            interface,
         });
     }
     bricks.sort_by(|a, b| a.name.cmp(&b.name));
@@ -208,12 +220,20 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
                     .collect()
             })
             .unwrap_or_default();
+        let test_project = doc
+            .get("package")
+            .and_then(|p| p.get("metadata"))
+            .and_then(|m| m.get("polylith"))
+            .and_then(|p| p.get("test-project"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         projects.push(Project {
             name,
             path: path.clone(),
             deps,
             members,
             patches,
+            test_project,
         });
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));

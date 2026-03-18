@@ -31,6 +31,9 @@ pub enum ViolationKind {
     /// A component or base exists in its polylith directory but is not listed in the root
     /// workspace members, so `cargo build --workspace` will silently ignore it.
     NotInRootWorkspace,
+    /// Two or more components declare the same interface name but none has a package name
+    /// matching the interface — every consumer must `[patch]` explicitly (no default impl).
+    AmbiguousInterface,
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -126,19 +129,38 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
     }
 
     // --- project checks ---
-    // NOTE: polylith distinguishes deliverable projects (require a base) from
-    // development/test projects (no base needed). The tool currently cannot
-    // tell them apart, so it warns on all base-free projects. A future
-    // improvement: honour `[package.metadata.polylith] test-project = true`
-    // to suppress this warning for test/dev projects.
     for project in &map.projects {
         let has_base_dep = project.deps.iter().any(|d| base_names.contains(d.as_str()));
-        if !has_base_dep {
+        if !has_base_dep && !project.test_project {
             violations.push(Violation {
                 kind: ViolationKind::ProjectMissingBase,
                 message: format!(
-                    "project '{}' has no base dependency — deliverable projects must include at least one base (test/dev projects may ignore this)",
+                    "project '{}' has no base dependency — deliverable projects must include at least one base; set `[package.metadata.polylith] test-project = true` to suppress for test/dev projects",
                     project.name
+                ),
+            });
+        }
+    }
+
+    // --- interface checks ---
+    // Group components by declared interface name. Warn when multiple components share
+    // an interface but none has a package name matching the interface (no default impl).
+    let mut by_interface: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+    for comp in &map.components {
+        if let Some(iface) = comp.interface.as_deref() {
+            by_interface.entry(iface).or_default().push(comp.name.as_str());
+        }
+    }
+    for (iface, impls) in &by_interface {
+        if impls.len() > 1 && !impls.iter().any(|n| *n == *iface) {
+            violations.push(Violation {
+                kind: ViolationKind::AmbiguousInterface,
+                message: format!(
+                    "interface '{}' has {} implementations ({}) but none has the default package name — every consumer must [patch] explicitly",
+                    iface,
+                    impls.len(),
+                    impls.join(", ")
                 ),
             });
         }

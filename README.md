@@ -264,8 +264,9 @@ cargo polylith check
 | `orphan` | Component is not reachable from any base or project (including via `[patch]` substitution) |
 | `wildcard` | Component's `lib.rs` uses `pub use <crate>::*` — prefer explicit re-exports |
 | `base-has-main` | A base has `src/main.rs` — executable entry points belong in projects |
-| `no-base` | A project has no base dependency — acceptable for test/dev projects |
+| `no-base` | A project has no base dependency — suppress with `[package.metadata.polylith] test-project = true` for test/dev projects |
 | `not-in-workspace` | A component or base exists in its directory but is not listed in root workspace members |
+| `ambiguous-interface` | Two or more components declare the same interface name but none has the default package name — every consumer must `[patch]` explicitly |
 
 Flags:
 - `--json` — machine-readable output (`{"violations": [...]}`)
