@@ -3,5 +3,8 @@ name = "parser"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.polylith]
+interface = "parser"
+
 [dependencies]
 logger = { path = "../logger" }
