@@ -35,6 +35,7 @@ pub enum InputMode {
 pub struct GridRow {
     pub name: String,
     pub kind: RowKind,
+    pub interface: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -63,14 +64,24 @@ pub struct App {
 
 impl App {
     pub fn new(map: &WorkspaceMap) -> Result<Self> {
-        let mut rows: Vec<GridRow> = map
+        // Sort components: interface groups first (alphabetically), no-interface last,
+        // within each group by name.
+        let mut comp_rows: Vec<GridRow> = map
             .components
             .iter()
-            .map(|c| GridRow { name: c.name.clone(), kind: RowKind::Component })
+            .map(|c| GridRow { name: c.name.clone(), kind: RowKind::Component, interface: c.interface.clone() })
             .collect();
+        comp_rows.sort_by(|a, b| match (&a.interface, &b.interface) {
+            (Some(ai), Some(bi)) => ai.cmp(bi).then(a.name.cmp(&b.name)),
+            (Some(_), None)      => std::cmp::Ordering::Less,
+            (None, Some(_))      => std::cmp::Ordering::Greater,
+            (None, None)         => a.name.cmp(&b.name),
+        });
+        let mut rows = comp_rows;
         rows.extend(map.bases.iter().map(|b| GridRow {
             name: b.name.clone(),
             kind: RowKind::Base,
+            interface: None,
         }));
 
         let cols: Vec<GridCol> = map

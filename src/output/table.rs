@@ -11,8 +11,31 @@ pub fn print_info(map: &WorkspaceMap) {
     if map.components.is_empty() {
         println!("  (none)");
     } else {
-        for c in &map.components {
-            println!("  {}", c.name.green());
+        let has_interfaces = map.components.iter().any(|c| c.interface.is_some());
+        if has_interfaces {
+            const IFACE_W: usize = 18;
+            let mut sorted: Vec<_> = map.components.iter().collect();
+            sorted.sort_by(|a, b| match (&a.interface, &b.interface) {
+                (Some(ai), Some(bi)) => ai.cmp(bi).then(a.name.cmp(&b.name)),
+                (Some(_), None)      => std::cmp::Ordering::Less,
+                (None, Some(_))      => std::cmp::Ordering::Greater,
+                (None, None)         => a.name.cmp(&b.name),
+            });
+            let mut prev_iface: Option<&str> = None;
+            for comp in &sorted {
+                let iface = comp.interface.as_deref();
+                let iface_label = if iface != prev_iface { iface.unwrap_or("") } else { "" };
+                println!(
+                    "  {:<IFACE_W$}{}",
+                    iface_label.dimmed(),
+                    comp.name.green()
+                );
+                prev_iface = iface;
+            }
+        } else {
+            for c in &map.components {
+                println!("  {}", c.name.green());
+            }
         }
     }
 

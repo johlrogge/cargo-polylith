@@ -7,7 +7,9 @@ use ratatui::{
 
 use super::app::{App, DepState, InputMode, RowKind};
 
-const LABEL_WIDTH: u16 = 24;
+const IFACE_WIDTH: u16 = 16; // interface label column (left)
+const IMPL_WIDTH: u16 = 22;  // component/base name column
+const LABEL_WIDTH: u16 = IFACE_WIDTH + IMPL_WIDTH; // total label area
 const COL_WIDTH: u16 = 2; // cell char + space
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -140,9 +142,26 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
 
         let is_cursor_row = row_i == app.cursor_row;
 
-        // Row label
-        let label = truncate(&app.rows[row_i].name, (LABEL_WIDTH - 1) as usize);
-        let padded = format!("{:<width$}", label, width = (LABEL_WIDTH - 1) as usize);
+        // Interface column — show only on the first row of each interface group.
+        let is_iface_start = match app.rows[row_i].interface.as_deref() {
+            None => false,
+            Some(iface) => row_i == 0 || app.rows[row_i - 1].interface.as_deref() != Some(iface),
+        };
+        let iface_str = if is_iface_start {
+            app.rows[row_i].interface.as_deref().unwrap_or("")
+        } else {
+            ""
+        };
+        {
+            let label = truncate(iface_str, (IFACE_WIDTH - 1) as usize);
+            let padded = format!("{:<width$}", label, width = (IFACE_WIDTH - 1) as usize);
+            let buf = frame.buffer_mut();
+            buf.set_string(inner.x, display_y, &padded, Style::default().fg(Color::DarkGray));
+        }
+
+        // Impl / base name column
+        let label = truncate(&app.rows[row_i].name, (IMPL_WIDTH - 1) as usize);
+        let padded = format!("{:<width$}", label, width = (IMPL_WIDTH - 1) as usize);
         let label_style = match (row_kind, is_cursor_row) {
             (RowKind::Component, true) => {
                 Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
@@ -155,7 +174,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         {
             let buf = frame.buffer_mut();
-            buf.set_string(inner.x, display_y, &padded, label_style);
+            buf.set_string(inner.x + IFACE_WIDTH, display_y, &padded, label_style);
         }
 
         // Cells
