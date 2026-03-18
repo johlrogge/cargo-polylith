@@ -100,6 +100,12 @@ pub fn print_deps(map: &WorkspaceMap, filter_component: Option<&str>) {
         map.components.iter().map(|c| c.name.as_str()).collect();
     let base_names: std::collections::HashSet<&str> =
         map.bases.iter().map(|b| b.name.as_str()).collect();
+    // name → interface label for annotation
+    let iface_of: std::collections::HashMap<&str, &str> = map
+        .components
+        .iter()
+        .filter_map(|c| c.interface.as_deref().map(|i| (c.name.as_str(), i)))
+        .collect();
 
     for base in &map.bases {
         if let Some(filter) = filter_component {
@@ -110,7 +116,10 @@ pub fn print_deps(map: &WorkspaceMap, filter_component: Option<&str>) {
         println!("{} (base)", base.name.cyan().bold());
         for dep in &base.deps {
             if component_names.contains(dep.as_str()) {
-                println!("  └─ {}", dep.green());
+                let iface = iface_of.get(dep.as_str())
+                    .map(|i| format!("  [{}]", i).dimmed().to_string())
+                    .unwrap_or_default();
+                println!("  └─ {}{}", dep.green(), iface);
             }
         }
     }
@@ -126,7 +135,10 @@ pub fn print_deps(map: &WorkspaceMap, filter_component: Option<&str>) {
             if base_names.contains(dep.as_str()) {
                 println!("  └─ {} (base)", dep.cyan());
             } else if component_names.contains(dep.as_str()) {
-                println!("  └─ {}", dep.green());
+                let iface = iface_of.get(dep.as_str())
+                    .map(|i| format!("  [{}]", i).dimmed().to_string())
+                    .unwrap_or_default();
+                println!("  └─ {}{}", dep.green(), iface);
             }
         }
     }
