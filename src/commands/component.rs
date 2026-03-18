@@ -1,17 +1,34 @@
 use std::env;
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::scaffold;
-use crate::workspace::resolve_root;
+use crate::workspace::{build_workspace_map, resolve_root};
 
-pub fn new(name: &str, workspace_root: Option<&Path>) -> Result<()> {
+pub fn new(name: &str, interface: Option<&str>, workspace_root: Option<&Path>) -> Result<()> {
     validate_name(name)?;
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
-    scaffold::create_component(&root, name)?;
-    println!("Created component '{name}' at components/{name}/");
+    let iface = interface.unwrap_or(name);
+    scaffold::create_component(&root, name, iface)?;
+    println!("Created component '{name}' (interface: '{iface}') at components/{name}/");
+    Ok(())
+}
+
+pub fn update(name: &str, interface: Option<&str>, workspace_root: Option<&Path>) -> Result<()> {
+    validate_name(name)?;
+    let cwd = env::current_dir()?;
+    let root = resolve_root(&cwd, workspace_root)?;
+    let map = build_workspace_map(&root)?;
+    let comp = map
+        .components
+        .iter()
+        .find(|c| c.name == name)
+        .with_context(|| format!("component '{name}' not found in workspace"))?;
+    let iface = interface.unwrap_or(name);
+    scaffold::write_interface_to_toml(&comp.path, iface)?;
+    println!("Updated component '{name}': interface = \"{iface}\"");
     Ok(())
 }
 

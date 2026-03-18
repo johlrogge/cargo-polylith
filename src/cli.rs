@@ -81,6 +81,17 @@ pub enum ComponentAction {
     New {
         /// Name of the component (snake_case)
         name: String,
+        /// Interface name (defaults to the crate name)
+        #[arg(long, value_name = "NAME")]
+        interface: Option<String>,
+    },
+    /// Set or update the interface annotation on an existing component
+    Update {
+        /// Name of the component
+        name: String,
+        /// Interface name (defaults to the crate name)
+        #[arg(long, value_name = "NAME")]
+        interface: Option<String>,
     },
 }
 

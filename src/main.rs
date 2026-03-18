@@ -20,8 +20,11 @@ fn main() {
         PolylithCommand::Component { action } => {
             use cli::ComponentAction;
             match action {
-                ComponentAction::New { name } => {
-                    commands::component::new(&name, workspace_root)
+                ComponentAction::New { name, interface } => {
+                    commands::component::new(&name, interface.as_deref(), workspace_root)
+                }
+                ComponentAction::Update { name, interface } => {
+                    commands::component::update(&name, interface.as_deref(), workspace_root)
                 }
             }
         }
