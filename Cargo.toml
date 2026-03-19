@@ -2,6 +2,13 @@
 name = "cargo-polylith"
 version = "0.1.1"
 edition = "2021"
+description = "Pragmatic polylith architecture tooling for Rust"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/johlrogge/cargo-polylith"
+readme = "README.md"
+authors = ["johlrogge"]
+keywords = ["polylith", "cargo", "workspace", "architecture"]
+categories = ["development-tools::cargo-plugins"]
 
 [[bin]]
 name = "cargo-polylith"
