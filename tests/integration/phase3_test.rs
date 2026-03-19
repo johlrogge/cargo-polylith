@@ -172,14 +172,14 @@ fn deps_json_component_filter() {
 // ── error messages ────────────────────────────────────────────────────────────
 
 #[test]
-fn no_workspace_gives_clear_error() {
+fn no_workspace_gives_clear_warning() {
     let tmp = TempDir::new().unwrap();
     cargo_polylith()
         .args(["polylith", "info"])
         .current_dir(tmp.path())
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("error"));
+        .success()
+        .stderr(predicate::str::contains("warning"));
 }
 
 #[test]
