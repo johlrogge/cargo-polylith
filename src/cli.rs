@@ -73,6 +73,28 @@ pub enum PolylithCommand {
     },
     /// Interactively compose projects (TUI)
     Edit,
+    /// Generate Claude Code integration files
+    Generate {
+        #[command(subcommand)]
+        action: GenerateAction,
+    },
+    /// MCP protocol server
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum GenerateAction {
+    /// Write .claude/commands/polylith.md skill file for Claude Code
+    Skill,
+}
+
+#[derive(Subcommand)]
+pub enum McpAction {
+    /// Start the MCP server (JSON-RPC 2.0 over stdin/stdout)
+    Serve,
 }
 
 #[derive(Subcommand)]

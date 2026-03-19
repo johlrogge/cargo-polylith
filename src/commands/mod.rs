@@ -1,4 +1,6 @@
 pub mod base;
+pub mod generate;
+pub mod mcp;
 pub mod check;
 pub mod component;
 pub mod deps;
