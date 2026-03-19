@@ -6,7 +6,7 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::scaffold;
-use crate::workspace::{build_workspace_map, resolve_root, run_checks, run_status};
+use crate::workspace::{build_workspace_map, classify_dep, resolve_root, run_checks, run_status, DepKind};
 
 pub fn serve(workspace_root: Option<&Path>, write: bool) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -209,23 +209,21 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
             let filter = arguments.get("component").and_then(|v| v.as_str());
             match build_workspace_map(root) {
                 Ok(map) => {
-                    let component_names: std::collections::HashSet<&str> =
-                        map.components.iter().map(|c| c.name.as_str()).collect();
-                    let base_names: std::collections::HashSet<&str> =
-                        map.bases.iter().map(|b| b.name.as_str()).collect();
-
                     let bases: Vec<_> = map
                         .bases
                         .iter()
                         .filter(|b| filter.map(|f| b.deps.iter().any(|d| d == f)).unwrap_or(true))
                         .map(|b| {
-                            let component_deps: Vec<&str> = b
-                                .deps
-                                .iter()
-                                .filter(|d| component_names.contains(d.as_str()))
-                                .map(|d| d.as_str())
-                                .collect();
-                            json!({ "name": b.name, "component_deps": component_deps })
+                            let mut base_deps: Vec<&str> = vec![];
+                            let mut component_deps: Vec<&str> = vec![];
+                            for dep in &b.deps {
+                                match classify_dep(dep, &map) {
+                                    DepKind::Base(name)      => base_deps.push(name),
+                                    DepKind::Interface(name) => component_deps.push(name),
+                                    DepKind::External        => {}
+                                }
+                            }
+                            json!({ "name": b.name, "base_deps": base_deps, "component_deps": component_deps })
                         })
                         .collect();
 
@@ -234,18 +232,15 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                         .iter()
                         .filter(|p| filter.map(|f| p.deps.iter().any(|d| d == f)).unwrap_or(true))
                         .map(|p| {
-                            let base_deps: Vec<&str> = p
-                                .deps
-                                .iter()
-                                .filter(|d| base_names.contains(d.as_str()))
-                                .map(|d| d.as_str())
-                                .collect();
-                            let component_deps: Vec<&str> = p
-                                .deps
-                                .iter()
-                                .filter(|d| component_names.contains(d.as_str()))
-                                .map(|d| d.as_str())
-                                .collect();
+                            let mut base_deps: Vec<&str> = vec![];
+                            let mut component_deps: Vec<&str> = vec![];
+                            for dep in &p.deps {
+                                match classify_dep(dep, &map) {
+                                    DepKind::Base(name)      => base_deps.push(name),
+                                    DepKind::Interface(name) => component_deps.push(name),
+                                    DepKind::External        => {}
+                                }
+                            }
                             json!({ "name": p.name, "base_deps": base_deps, "component_deps": component_deps })
                         })
                         .collect();
