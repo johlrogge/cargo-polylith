@@ -5,9 +5,10 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::{json, Value};
 
+use crate::scaffold;
 use crate::workspace::{build_workspace_map, resolve_root, run_checks, run_status};
 
-pub fn serve(workspace_root: Option<&Path>) -> Result<()> {
+pub fn serve(workspace_root: Option<&Path>, write: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
 
@@ -30,8 +31,8 @@ pub fn serve(workspace_root: Option<&Path>) -> Result<()> {
         let response = match method {
             "initialize" => initialize(id),
             "initialized" => continue,
-            "tools/list" => tools_list(id),
-            "tools/call" => tools_call(id, &req, &root),
+            "tools/list" => tools_list(id, write),
+            "tools/call" => tools_call(id, &req, &root, write),
             _ => method_not_found(id, method),
         };
 
@@ -58,60 +59,112 @@ fn initialize(id: Value) -> Value {
     })
 }
 
-fn tools_list(id: Value) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "result": {
-            "tools": [
-                {
-                    "name": "polylith_info",
-                    "description": "Return workspace info: all components, bases, and projects with their deps",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                },
-                {
-                    "name": "polylith_deps",
-                    "description": "Return the dependency graph between bases, projects, and components",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "component": {
-                                "type": "string",
-                                "description": "Filter to show only bases/projects that depend on this component"
-                            }
-                        }
-                    }
-                },
-                {
-                    "name": "polylith_check",
-                    "description": "Check workspace structure for polylith violations",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                },
-                {
-                    "name": "polylith_status",
-                    "description": "Show a lenient audit of workspace structure (divergences and suggestions)",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {}
+fn tools_list(id: Value, write: bool) -> Value {
+    let mut tools = vec![
+        json!({
+            "name": "polylith_info",
+            "description": "Return workspace info: all components, bases, and projects with their deps",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "polylith_deps",
+            "description": "Return the dependency graph between bases, projects, and components",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "component": {
+                        "type": "string",
+                        "description": "Filter to show only bases/projects that depend on this component"
                     }
                 }
-            ]
-        }
-    })
+            }
+        }),
+        json!({
+            "name": "polylith_check",
+            "description": "Check workspace structure for polylith violations",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "polylith_status",
+            "description": "Show a lenient audit of workspace structure (divergences and suggestions)",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+    ];
+
+    if write {
+        tools.extend([
+            json!({
+                "name": "polylith_component_new",
+                "description": "Create a new component under components/<name>/",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": { "type": "string", "description": "Component name (snake_case)" },
+                        "interface": { "type": "string", "description": "Interface group name (defaults to component name)" }
+                    }
+                }
+            }),
+            json!({
+                "name": "polylith_base_new",
+                "description": "Create a new base under bases/<name>/",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": { "type": "string", "description": "Base name (snake_case)" }
+                    }
+                }
+            }),
+            json!({
+                "name": "polylith_project_new",
+                "description": "Create a new project workspace under projects/<name>/",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": { "type": "string", "description": "Project name" }
+                    }
+                }
+            }),
+            json!({
+                "name": "polylith_component_update",
+                "description": "Set or update the interface annotation on an existing component",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name", "interface"],
+                    "properties": {
+                        "name": { "type": "string", "description": "Component name" },
+                        "interface": { "type": "string", "description": "Interface group name" }
+                    }
+                }
+            }),
+            json!({
+                "name": "polylith_set_implementation",
+                "description": "Select which component implementation to use for an interface in a project, by writing a [patch.crates-io] entry",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["project", "interface", "implementation"],
+                    "properties": {
+                        "project": { "type": "string", "description": "Project name" },
+                        "interface": { "type": "string", "description": "Interface (crate name) to patch" },
+                        "implementation": { "type": "string", "description": "Component name providing the implementation" }
+                    }
+                }
+            }),
+        ]);
+    }
+
+    json!({ "jsonrpc": "2.0", "id": id, "result": { "tools": tools } })
 }
 
-fn tools_call(id: Value, req: &Value, root: &Path) -> Value {
+fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
     let params = &req["params"];
     let name = params["name"].as_str().unwrap_or("");
     let arguments = &params["arguments"];
 
     let result_text = match name {
+        // ── read tools ──────────────────────────────────────────────────────
         "polylith_info" => match build_workspace_map(root) {
             Ok(map) => {
                 #[derive(serde::Serialize)]
@@ -245,6 +298,87 @@ fn tools_call(id: Value, req: &Value, root: &Path) -> Value {
             }
             Err(e) => format!("error: {e:#}"),
         },
+
+        // ── write tools ─────────────────────────────────────────────────────
+        "polylith_component_new" | "polylith_base_new" | "polylith_project_new"
+        | "polylith_component_update" | "polylith_set_implementation"
+            if !write =>
+        {
+            "write tools disabled — restart the MCP server with --write to enable scaffolding"
+                .to_string()
+        }
+
+        "polylith_component_new" => {
+            let comp_name = arguments["name"].as_str().unwrap_or("");
+            let interface = arguments
+                .get("interface")
+                .and_then(|v| v.as_str())
+                .unwrap_or(comp_name);
+            match scaffold::create_component(root, comp_name, interface) {
+                Ok(()) => format!("created component '{comp_name}' with interface '{interface}'"),
+                Err(e) => format!("error: {e:#}"),
+            }
+        }
+
+        "polylith_base_new" => {
+            let base_name = arguments["name"].as_str().unwrap_or("");
+            match scaffold::create_base(root, base_name) {
+                Ok(()) => format!("created base '{base_name}'"),
+                Err(e) => format!("error: {e:#}"),
+            }
+        }
+
+        "polylith_project_new" => {
+            let project_name = arguments["name"].as_str().unwrap_or("");
+            match scaffold::create_project(root, project_name) {
+                Ok(()) => format!("created project '{project_name}'"),
+                Err(e) => format!("error: {e:#}"),
+            }
+        }
+
+        "polylith_component_update" => {
+            let comp_name = arguments["name"].as_str().unwrap_or("");
+            let interface = arguments["interface"].as_str().unwrap_or("");
+            match build_workspace_map(root) {
+                Ok(map) => {
+                    match map.components.iter().find(|c| c.name == comp_name) {
+                        Some(comp) => {
+                            match scaffold::write_interface_to_toml(&comp.path, interface) {
+                                Ok(()) => format!("updated component '{comp_name}' interface to '{interface}'"),
+                                Err(e) => format!("error: {e:#}"),
+                            }
+                        }
+                        None => format!("component '{comp_name}' not found in workspace"),
+                    }
+                }
+                Err(e) => format!("error: {e:#}"),
+            }
+        }
+
+        "polylith_set_implementation" => {
+            let project_name = arguments["project"].as_str().unwrap_or("");
+            let interface = arguments["interface"].as_str().unwrap_or("");
+            let impl_name = arguments["implementation"].as_str().unwrap_or("");
+            match build_workspace_map(root) {
+                Ok(map) => {
+                    let project = map.projects.iter().find(|p| p.name == project_name);
+                    let component = map.components.iter().find(|c| c.name == impl_name);
+                    match (project, component) {
+                        (Some(proj), Some(comp)) => {
+                            match scaffold::set_project_patch(&proj.path, interface, &comp.path) {
+                                Ok(()) => format!(
+                                    "set implementation of '{interface}' to '{impl_name}' in project '{project_name}'"
+                                ),
+                                Err(e) => format!("error: {e:#}"),
+                            }
+                        }
+                        (None, _) => format!("project '{project_name}' not found"),
+                        (_, None) => format!("component '{impl_name}' not found"),
+                    }
+                }
+                Err(e) => format!("error: {e:#}"),
+            }
+        }
 
         _ => format!("unknown tool: {name}"),
     };
