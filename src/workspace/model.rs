@@ -42,4 +42,7 @@ pub struct WorkspaceMap {
     /// Raw member patterns from the root `[workspace] members = [...]`.
     /// Empty if the root Cargo.toml has no members list.
     pub root_members: Vec<String>,
+    /// False when the root Cargo.toml lacks a `[workspace]` section.
+    /// Commands should warn the user in this case.
+    pub is_workspace: bool,
 }

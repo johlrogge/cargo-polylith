@@ -28,8 +28,11 @@ pub fn resolve_root(start: &Path, override_root: Option<&Path>) -> Result<PathBu
 }
 
 /// Walk up from `start` to find the workspace root Cargo.toml (the one with `[workspace]`).
+/// If no workspace Cargo.toml is found, returns the nearest directory containing any
+/// Cargo.toml, or `start` itself — callers should check `WorkspaceMap::is_workspace`.
 pub fn find_workspace_root(start: &Path) -> Result<PathBuf> {
     let mut current = start.to_path_buf();
+    let mut fallback: Option<PathBuf> = None;
     loop {
         let candidate = current.join("Cargo.toml");
         if candidate.exists() {
@@ -38,12 +41,12 @@ pub fn find_workspace_root(start: &Path) -> Result<PathBuf> {
             if manifest.workspace.is_some() {
                 return Ok(current);
             }
+            if fallback.is_none() {
+                fallback = Some(current.clone());
+            }
         }
         if !current.pop() {
-            anyhow::bail!(
-                "no workspace Cargo.toml found starting from {}",
-                start.display()
-            );
+            return Ok(fallback.unwrap_or_else(|| start.to_path_buf()));
         }
     }
 }
@@ -53,12 +56,17 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
     let components = scan_bricks(root, BrickKind::Component)?;
     let bases = scan_bricks(root, BrickKind::Base)?;
     let projects = scan_projects(root)?;
-    let root_members = {
-        let manifest = Manifest::from_path(&root.join("Cargo.toml"))
-            .with_context(|| format!("failed to parse {}", root.join("Cargo.toml").display()))?;
-        manifest.workspace
-            .map(|ws| ws.members)
-            .unwrap_or_default()
+    let (root_members, is_workspace) = {
+        let toml_path = root.join("Cargo.toml");
+        if toml_path.exists() {
+            let manifest = Manifest::from_path(&toml_path)
+                .with_context(|| format!("failed to parse {}", toml_path.display()))?;
+            let is_ws = manifest.workspace.is_some();
+            let members = manifest.workspace.map(|ws| ws.members).unwrap_or_default();
+            (members, is_ws)
+        } else {
+            (vec![], false)
+        }
     };
     Ok(WorkspaceMap {
         root: root.to_path_buf(),
@@ -66,6 +74,7 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
         bases,
         projects,
         root_members,
+        is_workspace,
     })
 }
 
