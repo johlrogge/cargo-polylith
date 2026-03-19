@@ -129,19 +129,36 @@ Creates a new component crate.
 
 ```
 cargo polylith component new payment
+cargo polylith component new payment --interface payment-service
 ```
+
+The `--interface` flag sets the interface name written to `[package.metadata.polylith]`; defaults to
+the crate name when omitted.
 
 Produces:
 
 ```
 components/payment/
-  Cargo.toml
+  Cargo.toml   ← includes [package.metadata.polylith] interface = "payment"
   src/
-    lib.rs        ← implementation stub
+    lib.rs     ← implementation stub
 ```
 
 Also appends `"components/payment"` to `[workspace].members` in the root `Cargo.toml`
 using `toml_edit` (preserves existing comments and formatting).
+
+---
+
+### `cargo polylith component update <name>`
+
+Sets or replaces the interface annotation on an existing component's `Cargo.toml`.
+
+```
+cargo polylith component update payment
+cargo polylith component update payment --interface payment-service
+```
+
+Defaults to the crate name when `--interface` is omitted.
 
 ---
 
@@ -268,6 +285,7 @@ cargo polylith check
 | `not-in-workspace` | A component or base exists in its directory but is not listed in root workspace members |
 | `ambiguous-interface` | Two or more components declare the same interface name but none has the default package name — every consumer must `[patch]` explicitly |
 | `duplicate-name` | Two or more components share the same package name — rename the stub and declare `interface` metadata on both |
+| `missing-interface` | Every component must declare `[package.metadata.polylith] interface = "..."` — use `component update <name>` or `cargo polylith edit` (press 'i') to set it |
 
 Flags:
 - `--json` — machine-readable output (`{"violations": [...]}`)
