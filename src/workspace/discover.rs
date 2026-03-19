@@ -187,31 +187,43 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             .and_then(|v| v.as_str())
             .map(|s| s.to_owned())
             .unwrap_or(dir_name);
-        let deps = doc
-            .get("dependencies")
+        // Resolve a dep entry (key, value) to the actual package name.
+        // If `package = "..."` is set, that is the real crate name being pulled in;
+        // the key is just a local alias. This applies to both [dependencies] and
+        // [workspace.dependencies].
+        let resolve_pkg_name = |k: &str, v: &toml_edit::Item| -> String {
+            let pkg = v
+                .as_value()
+                .and_then(|v| v.as_inline_table())
+                .and_then(|it| it.get("package"))
+                .and_then(|v| v.as_str())
+                .or_else(|| {
+                    v.as_table()
+                        .and_then(|t| t.get("package"))
+                        .and_then(|v| v.as_value())
+                        .and_then(|v| v.as_str())
+                });
+            pkg.unwrap_or(k).to_string()
+        };
+        let mut dep_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // [dependencies] — direct deps of the project binary
+        if let Some(t) = doc.get("dependencies").and_then(|t| t.as_table()) {
+            for (k, v) in t.iter() {
+                dep_set.insert(resolve_pkg_name(k, v));
+            }
+        }
+        // [workspace.dependencies] — inherited by bases listed as workspace members;
+        // components resolved here (especially renamed ones) are active in this project.
+        if let Some(t) = doc
+            .get("workspace")
+            .and_then(|ws| ws.get("dependencies"))
             .and_then(|t| t.as_table())
-            .map(|t| {
-                t.iter()
-                    .map(|(k, v)| {
-                        // If the dep has `package = "..."`, that is the actual crate
-                        // being pulled in. Use it so orphan checks and dep-state
-                        // lookups match on the real crate name, not the alias.
-                        let pkg = v
-                            .as_value()
-                            .and_then(|v| v.as_inline_table())
-                            .and_then(|it| it.get("package"))
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                v.as_table()
-                                    .and_then(|t| t.get("package"))
-                                    .and_then(|v| v.as_value())
-                                    .and_then(|v| v.as_str())
-                            });
-                        pkg.unwrap_or(k).to_string()
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        {
+            for (k, v) in t.iter() {
+                dep_set.insert(resolve_pkg_name(k, v));
+            }
+        }
+        let deps: Vec<String> = dep_set.into_iter().collect();
         let members = doc
             .get("workspace")
             .and_then(|ws| ws.get("members"))
