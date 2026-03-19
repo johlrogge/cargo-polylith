@@ -37,15 +37,8 @@ pub fn run_status(map: &WorkspaceMap) -> StatusReport {
         );
     }
 
-    // base-depends-on-base
     let base_names: std::collections::HashSet<&str> =
         map.bases.iter().map(|b| b.name.as_str()).collect();
-    let has_base_dep_base = map.bases.iter().any(|b| b.deps.iter().any(|d| base_names.contains(d.as_str())));
-    if has_base_dep_base {
-        suggestions.push("Some base(s) depend on other bases — bases may only depend on components".to_string());
-    } else {
-        confirmed.push("No base-depends-on-base".to_string());
-    }
 
     // --- component checks ---
     // Build transitive closure: all components reachable from any base.

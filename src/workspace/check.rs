@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use super::model::WorkspaceMap;
+use super::{classify_dep, DepKind};
 
 /// A single violation found during `check`.
 #[derive(Debug, Clone, Serialize)]
@@ -20,8 +21,6 @@ pub enum ViolationKind {
     BaseMissingLibRs,
     /// A base has a `src/main.rs` — executable entry points belong in projects, not bases.
     BaseHasMainRs,
-    /// A base depends on another base (only components are allowed as deps).
-    BaseDepOnBase,
     /// A component is not depended on by any base or project (potential dead code).
     OrphanComponent,
     /// A component's lib.rs uses a wildcard re-export (`pub use <name>::*`).
@@ -48,7 +47,23 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
     let base_names: std::collections::HashSet<&str> =
         map.bases.iter().map(|b| b.name.as_str()).collect();
 
+    // Resolve a dep key (which may be an interface alias) to the component package
+    // name(s) it refers to. Returns an empty vec for bases and external crates.
+    let resolve_dep = |dep: &str| -> Vec<&str> {
+        match classify_dep(dep, map) {
+            DepKind::Interface(iface) => map
+                .components
+                .iter()
+                .filter(|c| c.name == iface || c.interface.as_deref() == Some(iface))
+                .map(|c| c.name.as_str())
+                .collect(),
+            _ => vec![],
+        }
+    };
+
     // Transitive closure: all components reachable from any base or project.
+    // The queue contains component *package names* (not interface aliases) so that
+    // comp_deps lookups work correctly.
     let comp_deps: std::collections::HashMap<&str, &[String]> = map
         .components
         .iter()
@@ -58,12 +73,13 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
     let mut queue: std::collections::VecDeque<&str> = map
         .bases
         .iter()
-        .flat_map(|b| b.deps.iter().map(|d| d.as_str()))
+        .flat_map(|b| b.deps.iter().flat_map(|d| resolve_dep(d)))
         .chain(map.projects.iter().flat_map(|p| {
-            p.deps.iter().map(|dep_name| {
+            p.deps.iter().flat_map(|dep_name| {
                 // If this dep is replaced by a patch, seed the BFS with the patched
                 // component's name so the stub is counted as reachable (not orphaned).
-                p.patches
+                let patched = p
+                    .patches
                     .iter()
                     .find(|(patched_dep, _)| patched_dep == dep_name)
                     .and_then(|(_, patch_path)| {
@@ -72,8 +88,12 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
                             .chain(map.bases.iter())
                             .find(|brick| brick.path == *patch_path)
                             .map(|brick| brick.name.as_str())
-                    })
-                    .unwrap_or(dep_name.as_str())
+                    });
+                if let Some(name) = patched {
+                    vec![name]
+                } else {
+                    resolve_dep(dep_name)
+                }
             })
         }))
         .collect();
@@ -81,7 +101,9 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
         if depended_on.insert(name) {
             if let Some(deps) = comp_deps.get(name) {
                 for d in *deps {
-                    queue.push_back(d.as_str());
+                    for resolved in resolve_dep(d) {
+                        queue.push_back(resolved);
+                    }
                 }
             }
         }
@@ -260,17 +282,6 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
             });
         }
 
-        for dep in &base.deps {
-            if base_names.contains(dep.as_str()) {
-                violations.push(Violation {
-                    kind: ViolationKind::BaseDepOnBase,
-                    message: format!(
-                        "base '{}' depends on base '{}' — bases may only depend on components",
-                        base.name, dep
-                    ),
-                });
-            }
-        }
     }
 
     violations

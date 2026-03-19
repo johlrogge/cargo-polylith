@@ -194,10 +194,10 @@ fn check_base_with_main_rs_is_warning() {
         .stdout(predicate::str::contains("base-has-main"));
 }
 
-// ── base-dep-base ─────────────────────────────────────────────────────────────
+// ── base-dep-base (valid — no violation) ──────────────────────────────────────
 
 #[test]
-fn check_detects_base_depending_on_base() {
+fn check_allows_base_depending_on_base() {
     let tmp = init_valid_workspace();
 
     // base-a
@@ -209,7 +209,7 @@ fn check_detects_base_depending_on_base() {
         "[package]\nname = \"base_a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\n",
     ).unwrap();
 
-    // base-b depends on base-a
+    // base-b depends on base-a — this is valid in polylith
     let bb = tmp.path().join("bases/base_b");
     fs::create_dir_all(bb.join("src")).unwrap();
     fs::write(bb.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
@@ -222,9 +222,7 @@ fn check_detects_base_depending_on_base() {
     cargo_polylith()
         .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
         .assert()
-        .failure()
-        .stdout(predicate::str::contains("base_b"))
-        .stdout(predicate::str::contains("base_a"));
+        .stdout(predicate::str::contains("base-dep-base").not());
 }
 
 // ── orphan component (warning, not error) ─────────────────────────────────────

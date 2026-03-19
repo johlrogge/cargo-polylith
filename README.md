@@ -301,7 +301,6 @@ cargo polylith check
 |---|---|
 | `missing-lib` | Component or base has no `src/lib.rs` |
 | `missing-impl` | Component has no `src/lib.rs` AND no `src/<name>.rs` |
-| `base-dep-base` | A base depends on another base |
 
 **Warnings** (exit 0):
 

@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::workspace::check::{Violation, ViolationKind};
 use crate::workspace::model::WorkspaceMap;
 use crate::workspace::status::StatusReport;
+use crate::workspace::{classify_dep, DepKind};
 
 pub fn print_info(map: &WorkspaceMap) {
     println!("{}", "Components".bold());
@@ -96,17 +97,6 @@ pub fn print_info_json(map: &WorkspaceMap) {
 }
 
 pub fn print_deps(map: &WorkspaceMap, filter_component: Option<&str>) {
-    let component_names: std::collections::HashSet<&str> =
-        map.components.iter().map(|c| c.name.as_str()).collect();
-    let base_names: std::collections::HashSet<&str> =
-        map.bases.iter().map(|b| b.name.as_str()).collect();
-    // name → interface label for annotation
-    let iface_of: std::collections::HashMap<&str, &str> = map
-        .components
-        .iter()
-        .filter_map(|c| c.interface.as_deref().map(|i| (c.name.as_str(), i)))
-        .collect();
-
     for base in &map.bases {
         if let Some(filter) = filter_component {
             if !base.deps.contains(&filter.to_string()) {
@@ -115,11 +105,10 @@ pub fn print_deps(map: &WorkspaceMap, filter_component: Option<&str>) {
         }
         println!("{} (base)", base.name.cyan().bold());
         for dep in &base.deps {
-            if component_names.contains(dep.as_str()) {
-                let iface = iface_of.get(dep.as_str())
-                    .map(|i| format!("  [{}]", i).dimmed().to_string())
-                    .unwrap_or_default();
-                println!("  └─ {}{}", dep.green(), iface);
+            match classify_dep(dep, map) {
+                DepKind::Base(name)      => println!("  └─ {} (base)", name.cyan()),
+                DepKind::Interface(name) => println!("  └─ {}", name.green()),
+                DepKind::External        => {}
             }
         }
     }
@@ -132,13 +121,10 @@ pub fn print_deps(map: &WorkspaceMap, filter_component: Option<&str>) {
         }
         println!("{} (project)", project.name.yellow().bold());
         for dep in &project.deps {
-            if base_names.contains(dep.as_str()) {
-                println!("  └─ {} (base)", dep.cyan());
-            } else if component_names.contains(dep.as_str()) {
-                let iface = iface_of.get(dep.as_str())
-                    .map(|i| format!("  [{}]", i).dimmed().to_string())
-                    .unwrap_or_default();
-                println!("  └─ {}{}", dep.green(), iface);
+            match classify_dep(dep, map) {
+                DepKind::Base(name)      => println!("  └─ {} (base)", name.cyan()),
+                DepKind::Interface(name) => println!("  └─ {}", name.green()),
+                DepKind::External        => {}
             }
         }
     }
@@ -160,9 +146,9 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::AmbiguousInterface   => "ambiguous-interface".yellow().to_string(),
             ViolationKind::DuplicateName        => "duplicate-name".yellow().to_string(),
             ViolationKind::MissingInterface     => "missing-interface".yellow().to_string(),
-            ViolationKind::BaseDepOnBase        => "base-dep-base".red().to_string(),
             ViolationKind::BaseMissingLibRs     => "missing-lib".red().to_string(),
-            _                                   => "missing".red().to_string(),
+            ViolationKind::MissingLibRs         => "missing-lib".red().to_string(),
+            ViolationKind::MissingImplFile      => "missing-impl".red().to_string(),
         };
         println!("  [{tag}] {}", v.message);
     }
@@ -226,23 +212,21 @@ pub fn print_check_json(violations: &[Violation]) {
 }
 
 pub fn print_deps_json(map: &WorkspaceMap, filter_component: Option<&str>) {
-    let component_names: std::collections::HashSet<&str> =
-        map.components.iter().map(|c| c.name.as_str()).collect();
-    let base_names: std::collections::HashSet<&str> =
-        map.bases.iter().map(|b| b.name.as_str()).collect();
-
     let bases: Vec<_> = map
         .bases
         .iter()
         .filter(|b| filter_component.map(|f| b.deps.contains(&f.to_string())).unwrap_or(true))
         .map(|b| {
-            let component_deps: Vec<&str> = b
-                .deps
-                .iter()
-                .filter(|d| component_names.contains(d.as_str()))
-                .map(|d| d.as_str())
-                .collect();
-            json!({ "name": b.name, "component_deps": component_deps })
+            let mut base_deps: Vec<&str> = vec![];
+            let mut component_deps: Vec<&str> = vec![];
+            for dep in &b.deps {
+                match classify_dep(dep, map) {
+                    DepKind::Base(name)      => base_deps.push(name),
+                    DepKind::Interface(name) => component_deps.push(name),
+                    DepKind::External        => {}
+                }
+            }
+            json!({ "name": b.name, "base_deps": base_deps, "component_deps": component_deps })
         })
         .collect();
 
@@ -251,8 +235,15 @@ pub fn print_deps_json(map: &WorkspaceMap, filter_component: Option<&str>) {
         .iter()
         .filter(|p| filter_component.map(|f| p.deps.contains(&f.to_string())).unwrap_or(true))
         .map(|p| {
-            let base_deps: Vec<&str> = p.deps.iter().filter(|d| base_names.contains(d.as_str())).map(|d| d.as_str()).collect();
-            let component_deps: Vec<&str> = p.deps.iter().filter(|d| component_names.contains(d.as_str())).map(|d| d.as_str()).collect();
+            let mut base_deps: Vec<&str> = vec![];
+            let mut component_deps: Vec<&str> = vec![];
+            for dep in &p.deps {
+                match classify_dep(dep, map) {
+                    DepKind::Base(name)      => base_deps.push(name),
+                    DepKind::Interface(name) => component_deps.push(name),
+                    DepKind::External        => {}
+                }
+            }
             json!({ "name": p.name, "base_deps": base_deps, "component_deps": component_deps })
         })
         .collect();
