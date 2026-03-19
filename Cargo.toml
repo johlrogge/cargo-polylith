@@ -1,6 +1,6 @@
 [package]
 name = "cargo-polylith"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Pragmatic polylith architecture tooling for Rust"
 license = "MIT OR Apache-2.0"
