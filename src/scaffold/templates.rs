@@ -44,6 +44,10 @@ pub fn base_main_rs() -> &'static str {
     "fn main() {\n    println!(\"Hello from base!\");\n}\n"
 }
 
+pub fn claude_skill_md() -> &'static str {
+    include_str!("claude_skill.md")
+}
+
 pub fn project_cargo_toml(_name: &str) -> String {
     format!(
         r#"[workspace]

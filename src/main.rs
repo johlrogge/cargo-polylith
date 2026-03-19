@@ -47,6 +47,18 @@ fn main() {
         PolylithCommand::Check { json } => commands::check::run(json, workspace_root),
         PolylithCommand::Status { json } => commands::status::run(json, workspace_root),
         PolylithCommand::Edit => commands::edit::run(workspace_root),
+        PolylithCommand::Generate { action } => {
+            use cli::GenerateAction;
+            match action {
+                GenerateAction::Skill => commands::generate::skill(workspace_root),
+            }
+        }
+        PolylithCommand::Mcp { action } => {
+            use cli::McpAction;
+            match action {
+                McpAction::Serve => commands::mcp::serve(workspace_root),
+            }
+        }
     };
 
     if let Err(e) = result {
