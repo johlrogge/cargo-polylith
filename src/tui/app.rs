@@ -378,25 +378,38 @@ fn write_project_deps(
             .and_then(|r| r.get(col_i))
             .map(|&s| s == DepState::Direct)
             .unwrap_or(false);
-        let dep_key = &row.name;
+        // Use the polylith interface name as the dep key when it differs from the
+        // crate name — this enables substitution (e.g. stub vs real) without
+        // changing call-site code. Cargo's `package` key handles the rename.
+        let dep_key = row.interface.as_deref()
+            .filter(|iface| *iface != row.name.as_str())
+            .unwrap_or(&row.name);
 
         if selected {
             // Add if not already present
-            if deps.get(dep_key.as_str()).is_none() {
+            if deps.get(dep_key).is_none() {
                 let kind_dir = match row.kind {
                     RowKind::Component => "components",
                     RowKind::Base => "bases",
                 };
-                let path_str = format!("../../{}/{}", kind_dir, dep_key);
+                let dir_name = row.path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let path_str = format!("../../{}/{}", kind_dir, dir_name);
                 let mut tbl = toml_edit::InlineTable::new();
                 tbl.insert("path", toml_edit::Value::from(path_str));
-                deps[dep_key.as_str()] =
+                // If the crate name differs from the interface/dep key, add `package`
+                // so Cargo knows which crate to actually pull in.
+                if dep_key != row.name.as_str() {
+                    tbl.insert("package", toml_edit::Value::from(row.name.clone()));
+                }
+                deps[dep_key] =
                     toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl));
             }
         } else {
             // Only remove if it's a brick path dep (not an external dep)
             if is_brick_dep(deps, dep_key) {
-                deps.remove(dep_key.as_str());
+                deps.remove(dep_key);
             }
         }
     }

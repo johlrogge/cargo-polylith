@@ -181,7 +181,27 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
         let deps = doc
             .get("dependencies")
             .and_then(|t| t.as_table())
-            .map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
+            .map(|t| {
+                t.iter()
+                    .map(|(k, v)| {
+                        // If the dep has `package = "..."`, that is the actual crate
+                        // being pulled in. Use it so orphan checks and dep-state
+                        // lookups match on the real crate name, not the alias.
+                        let pkg = v
+                            .as_value()
+                            .and_then(|v| v.as_inline_table())
+                            .and_then(|it| it.get("package"))
+                            .and_then(|v| v.as_str())
+                            .or_else(|| {
+                                v.as_table()
+                                    .and_then(|t| t.get("package"))
+                                    .and_then(|v| v.as_value())
+                                    .and_then(|v| v.as_str())
+                            });
+                        pkg.unwrap_or(k).to_string()
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         let members = doc
             .get("workspace")
