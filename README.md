@@ -6,6 +6,9 @@ architecture model to Rust/Cargo workspaces.
 All analysis is pure TOML + filesystem — no `cargo metadata` invocation, so the tool works
 even when the workspace doesn't fully compile.
 
+See [VISION.md](VISION.md) for the philosophy behind cargo-polylith and how we adapt
+Polylith's model for Rust.
+
 ---
 
 ## The polylith model — our Rust interpretation
