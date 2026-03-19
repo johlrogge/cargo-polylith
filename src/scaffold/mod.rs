@@ -95,10 +95,17 @@ pub fn create_project(root: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Set `[patch.crates-io].<interface> = { path = "<rel>" }` in a project's `Cargo.toml`,
-/// creating the `[patch]` and `[patch.crates-io]` tables if they don't exist.
-/// The path written is relative from `project_path/` to `component_path/`.
-pub fn set_project_patch(
+/// Declare a component implementation for an interface in a project's `[dependencies]`.
+///
+/// Writes:
+/// ```toml
+/// <interface> = { path = "<rel>" }                          # when pkg name == interface
+/// <interface> = { path = "<rel>", package = "<pkg-name>" }  # when pkg name differs
+/// ```
+///
+/// The `package` key is only included when the component's actual package name differs
+/// from the interface alias — matching the pattern used in real-world polylith workspaces.
+pub fn set_project_implementation(
     project_path: &Path,
     interface: &str,
     component_path: &Path,
@@ -108,22 +115,30 @@ pub fn set_project_patch(
         .with_context(|| format!("reading {}", manifest_path.display()))?;
     let mut doc: DocumentMut = content.parse().context("parsing project Cargo.toml")?;
 
+    // Read the component's actual package name.
+    let comp_manifest = component_path.join("Cargo.toml");
+    let comp_content = fs::read_to_string(&comp_manifest)
+        .with_context(|| format!("reading {}", comp_manifest.display()))?;
+    let comp_doc: DocumentMut = comp_content.parse().context("parsing component Cargo.toml")?;
+    let pkg_name = comp_doc["package"]["name"]
+        .as_str()
+        .unwrap_or(interface)
+        .to_string();
+
     let rel = relative_path(project_path, component_path);
     let rel_str = rel.to_string_lossy();
 
-    // Ensure [patch] table
-    if doc.get("patch").is_none() {
-        doc["patch"] = toml_edit::table();
-    }
-    // Ensure [patch.crates-io] table
-    if doc["patch"].get("crates-io").is_none() {
-        doc["patch"]["crates-io"] = toml_edit::table();
+    // Ensure [dependencies] table exists.
+    if doc.get("dependencies").is_none() {
+        doc["dependencies"] = toml_edit::table();
     }
 
-    // Set the inline table: interface = { path = "..." }
     let mut tbl = toml_edit::InlineTable::new();
     tbl.insert("path", toml_edit::Value::from(rel_str.as_ref()));
-    doc["patch"]["crates-io"][interface] =
+    if pkg_name != interface {
+        tbl.insert("package", toml_edit::Value::from(pkg_name.as_str()));
+    }
+    doc["dependencies"][interface] =
         toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl));
 
     fs::write(&manifest_path, doc.to_string())

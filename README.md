@@ -45,25 +45,25 @@ Polylith organises code into four building blocks:
 **Components** — library crates that implement a named interface. Each component declares its
 interface via `[package.metadata.polylith] interface = "<name>"` in its `Cargo.toml`. Multiple
 components may implement the same interface name; exactly one is active in any given build
-context (selected via `[patch.crates-io]` in a project workspace).
+context (selected by path dependency in a project workspace).
 
 **Bases** — entry-point crates that wire components into a runnable program. Bases depend on
 components and expose a library API (`src/lib.rs`) so that project workspace manifests can call
 their `run()` function from a thin `src/main.rs`. Bases must not have their own `src/main.rs`.
 
 **Projects** — standalone Cargo workspaces in `projects/`. Each project is an independently
-buildable workspace that selects a specific combination of bases and, via `[patch.crates-io]`,
-chooses which component implementations to use.
+buildable workspace that selects a specific combination of bases and component implementations
+via path dependencies in `[dependencies]`.
 
 **Development project** — the root workspace itself. It contains all components and bases and
 is optimised for fast feedback during development and testing. Components in the root workspace
-default to lightweight implementations (stubs, in-memory versions). Projects patch in
+default to lightweight implementations (stubs, in-memory versions). Projects select
 production-grade implementations as needed.
 
 **Interfaces** — named contracts declared in `[package.metadata.polylith]`. Two components with
 the same interface name are alternative implementations. The Rust compiler enforces type
-compatibility when an implementation is swapped via `[patch]`; `cargo polylith check` performs a
-structural pre-check on public symbol names.
+compatibility when an implementation is swapped; `cargo polylith check` performs a structural
+pre-check on public symbol names.
 
 ---
 
@@ -72,12 +72,12 @@ structural pre-check on public symbol names.
 | Concept | Clojure polylith | cargo-polylith | Why |
 |---|---|---|---|
 | **Interface declaration** | Namespace structure — components implement an interface by having the same namespace | `[package.metadata.polylith] interface = "..."` in Cargo.toml | Rust has no namespace-based interface; explicit metadata is unambiguous and prevents typos from creating phantom interfaces |
-| **Profile / implementation switching** | Named profiles in `deps.edn` select which source directories are compiled in | `[patch.crates-io]` in a project workspace Cargo.toml | Cargo `[patch]` is the closest analog — compile-time substitution of one crate for another |
+| **Profile / implementation switching** | Named profiles in `deps.edn` select which source directories are compiled in | Path dependency aliased to the interface name in a project's `[dependencies]`; `package = "..."` when the crate name differs | Cargo path deps are the natural mechanism — no indirection through a registry needed |
 | **Development project** | A dedicated `development/` project at the workspace root | The root workspace itself | Cargo's workspace model is already the right structure; no separate project needed |
-| **Stub-first development** | Default profile uses the primary implementation | Root workspace uses lightweight/stub components by default; production projects patch in the real thing | Enables fast tests without heavy deps (PipeWire, file scanning, sha2, etc.) |
+| **Stub-first development** | Default profile uses the primary implementation | Root workspace uses lightweight/stub components by default; projects select production-grade implementations via path deps | Enables fast tests without heavy deps (PipeWire, file scanning, sha2, etc.) |
 | **Test/dev projects** | The development project has no base requirement | Projects in `projects/` that are test or development harnesses do not require a base dependency | A test runner is an entry point in its own right; forcing a base dependency would be artificial |
-| **Interface compatibility** | `poly` tool checks that components implementing the same interface have matching public APIs | Rust compiler enforces compatibility when you swap via `[patch]`; `cargo polylith check` does a structural pre-check on public symbol names | Rust's type system is more expressive than namespace-based interfaces — let the compiler do the definitive check |
-| **One interface, two implementations without a default** | Both implementations live in the workspace; profiles select | Both components have the same interface name but neither has a package name matching the interface — every consumer must `[patch]` explicitly | Makes the choice intentional rather than implicit; the tool warns `AmbiguousInterface` |
+| **Interface compatibility** | `poly` tool checks that components implementing the same interface have matching public APIs | Rust compiler enforces compatibility when you swap implementations; `cargo polylith check` does a structural pre-check on public symbol names | Rust's type system is more expressive than namespace-based interfaces — let the compiler do the definitive check |
+| **One interface, two implementations without a default** | Both implementations live in the workspace; profiles select | Both components have the same interface name but neither has a package name matching the interface — every consumer must explicitly declare which to use | Makes the choice intentional rather than implicit; the tool warns `AmbiguousInterface` |
 
 ---
 
@@ -121,7 +121,7 @@ cargo polylith base new api
 
 # 5. Create a deployable project
 cargo polylith project new production
-# → projects/production/Cargo.toml  (standalone workspace + [patch] placeholders)
+# → projects/production/Cargo.toml  (standalone workspace, add [dependencies] for impls)
 
 # 6. Inspect the workspace
 cargo polylith info
@@ -225,21 +225,20 @@ Produces:
 
 ```
 projects/production/
-  Cargo.toml     ← standalone [workspace] with member/patch placeholders
+  Cargo.toml     ← standalone [workspace], add [dependencies] for component impls
 ```
 
-Edit the manifest to add the bases you want to ship and use `[patch.crates-io]` to swap in
-the component implementations appropriate for that project:
+Edit the manifest to add the bases you want to ship and declare which component
+implementation to use for each interface:
 
 ```toml
 [dependencies]
-# Declare the interface needed — implementation chosen below.
-library-service = "0.1"
+# Real implementation — package name matches the interface name, no package = needed.
+library-service = { path = "../../components/library_service" }
 
-[patch.crates-io]
-# Swap the stub for the real component in production.
-library-service = { path = "../../components/library_service_real",
-                    package = "library-service-real" }
+# Or use the stub — package name differs, so alias it to the interface name:
+# library-service = { path = "../../components/library_service_stub",
+#                     package = "library-service-stub" }
 ```
 
 ---
@@ -308,12 +307,12 @@ cargo polylith check
 
 | Tag | Description |
 |---|---|
-| `orphan` | Component is not reachable from any base or project (including via `[patch]` substitution) |
+| `orphan` | Component is not reachable from any base or project (including as a swapped implementation via `package =`) |
 | `wildcard` | Component's `lib.rs` uses `pub use <crate>::*` — prefer explicit re-exports |
 | `base-has-main` | A base has `src/main.rs` — executable entry points belong in projects |
 | `no-base` | A project has no base dependency — suppress with `[package.metadata.polylith] test-project = true` for test/dev projects |
 | `not-in-workspace` | A component or base exists in its directory but is not listed in root workspace members |
-| `ambiguous-interface` | Two or more components declare the same interface name but none has the default package name — every consumer must `[patch]` explicitly |
+| `ambiguous-interface` | Two or more components declare the same interface name but none has the default package name — every consumer must explicitly declare which implementation to use |
 | `duplicate-name` | Two or more components share the same package name — rename the stub and declare `interface` metadata on both |
 | `missing-interface` | Every component must declare `[package.metadata.polylith] interface = "..."` — use `component update <name>` or `cargo polylith edit` (press 'i') to set it |
 
@@ -362,9 +361,9 @@ my-mono/
       src/lib.rs          ← exposes run()
   projects/
     production/
-      Cargo.toml          ← standalone [workspace]; [patch.crates-io] selects real components
+      Cargo.toml          ← standalone [workspace]; [dependencies] selects real components
     bdd/
-      Cargo.toml          ← test/dev project; patches in stubs
+      Cargo.toml          ← test/dev project; [dependencies] uses stubs
 ```
 
 ---

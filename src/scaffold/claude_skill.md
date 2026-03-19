@@ -9,7 +9,7 @@ You are helping with a polylith-architecture Cargo workspace managed by `cargo-p
 ## The polylith model
 
 - **Component** — encapsulated domain logic. `src/lib.rs` re-exports a public interface from
-  private submodules. Swappable at build time via `[patch]` — no traits or generics needed.
+  private submodules. Swappable at build time via path dependencies — no traits or generics needed.
 - **Base** — thin wiring layer (HTTP server, CLI, worker, etc.). Depends on components; exposes
   its runtime API as `src/lib.rs`. Never a standalone binary.
 - **Project** — deployment unit. A Cargo workspace under `projects/<name>/` that selects one or
@@ -36,21 +36,24 @@ repo-root/
 
 ## Swappable implementations
 
-Multiple components can share the same `name` in their `Cargo.toml`. Projects select which
-path wins via `[workspace.dependencies]`:
+Components implementing the same interface have the same `interface` name in their metadata
+but different package names (e.g. `user` and `user-stub`). Projects select which
+implementation is active by declaring a path dependency aliased to the interface name:
 
 ```toml
-# projects/prod/Cargo.toml
-[workspace.dependencies]
+# projects/prod/Cargo.toml — use the real implementation
+[dependencies]
 user = { path = "../../components/user" }
+# package = omitted: the crate is already named "user"
 
-# projects/test/Cargo.toml
-[workspace.dependencies]
-user = { path = "../../components/user_stub" }
+# projects/bdd/Cargo.toml — use the stub
+[dependencies]
+user = { path = "../../components/user_stub", package = "user-stub" }
+# package = required: the stub crate is named "user-stub", not "user"
 ```
 
-No traits needed — the compiler enforces the interface. Missing or mismatched functions are
-compile errors at every call site.
+All code in both projects calls `use user::UserService;` identically. The compiler enforces
+that both components expose the same public API — mismatched functions are compile errors.
 
 ## Getting live workspace data
 

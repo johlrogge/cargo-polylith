@@ -57,9 +57,10 @@ members = [
 ]
 resolver = "2"
 
-# Use [patch] to swap component implementations:
-# [patch.crates-io]
+# Select component implementations via path dependencies:
+# [dependencies]
 # my-component = {{ path = "../../components/my-component" }}
+# my-component = {{ path = "../../components/my-component-stub", package = "my-component-stub" }}
 "#
     )
 }

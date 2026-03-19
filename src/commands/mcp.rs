@@ -141,7 +141,7 @@ fn tools_list(id: Value, write: bool) -> Value {
             }),
             json!({
                 "name": "polylith_set_implementation",
-                "description": "Select which component implementation to use for an interface in a project, by writing a [patch.crates-io] entry",
+                "description": "Select which component implementation to use for an interface in a project, by writing a [dependencies] entry with path (and package = if the crate name differs from the interface name)",
                 "inputSchema": {
                     "type": "object",
                     "required": ["project", "interface", "implementation"],
@@ -365,7 +365,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                     let component = map.components.iter().find(|c| c.name == impl_name);
                     match (project, component) {
                         (Some(proj), Some(comp)) => {
-                            match scaffold::set_project_patch(&proj.path, interface, &comp.path) {
+                            match scaffold::set_project_implementation(&proj.path, interface, &comp.path) {
                                 Ok(()) => format!(
                                     "set implementation of '{interface}' to '{impl_name}' in project '{project_name}'"
                                 ),

@@ -201,7 +201,7 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
             violations.push(Violation {
                 kind: ViolationKind::AmbiguousInterface,
                 message: format!(
-                    "interface '{}' has {} implementations ({}) but none has the default package name — every consumer must [patch] explicitly",
+                    "interface '{}' has {} implementations ({}) but none has the default package name — every consumer must explicitly declare which implementation to use (path + package = \"...\")",
                     iface,
                     impls.len(),
                     impls.join(", ")

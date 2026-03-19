@@ -39,7 +39,7 @@ values, but we do not use them as an excuse to abandon Polylith's architectural 
   never individually published to crates.io.
 - **Bricks depend on interfaces.** Components and bases may depend on other components, but
   they do so by referencing the interface (crate name), never a specific implementation.
-  Projects select which implementation is active via `[patch.crates-io]`.
+  Projects select which implementation is active via path dependencies aliased to the interface name.
 - **Fast feedback.** The development project builds all bricks; `cargo polylith check` requires
   no compilation.
 
@@ -71,10 +71,10 @@ Each deviation from the Clojure reference implementation is listed here with its
 | Concept | Clojure polylith | cargo-polylith | Why |
 |---|---|---|---|
 | **Interface declaration** | Namespace structure — same namespace = same interface | `[package.metadata.polylith] interface = "..."` in Cargo.toml | Rust has no namespace-based interface; explicit metadata is unambiguous and prevents typos from creating phantom interfaces |
-| **Interface enforcement** | `poly check` verifies matching public APIs across implementations | Rust compiler enforces full type compatibility when you swap via `[patch]`; `cargo polylith check` is a structural pre-flight | The compiler is more expressive and authoritative than namespace matching — we defer to it for the definitive check |
-| **Implementation switching** | Named profiles in `deps.edn` select which source directories are compiled | `[patch.crates-io]` in a project workspace Cargo.toml | Cargo `[patch]` is the closest analog — compile-time substitution of one crate for another; more explicit, same intent |
+| **Interface enforcement** | `poly check` verifies matching public APIs across implementations | Rust compiler enforces full type compatibility when you swap implementations; `cargo polylith check` is a structural pre-flight | The compiler is more expressive and authoritative than namespace matching — we defer to it for the definitive check |
+| **Implementation switching** | Named profiles in `deps.edn` select which source directories are compiled | Path dependency aliased to the interface name in a project's `[dependencies]`; `package = "..."` when the crate name differs from the alias | Direct path deps need no registry indirection — the selection is explicit and local to each project |
 | **Development project** | Dedicated `development/` project at workspace root | The root workspace itself | Cargo's workspace model is already the right structure; a wrapping project would add ceremony without benefit |
-| **Stub-first development** | Default profile uses the primary implementation | Root workspace uses lightweight/stub components; production projects patch in real implementations | Enables fast tests without heavy dependencies; maps naturally to Cargo's path dependency model |
+| **Stub-first development** | Default profile uses the primary implementation | Root workspace includes all implementations; each project's `[dependencies]` selects which is active | Enables fast tests without heavy dependencies; the choice is explicit per project |
 
 ---
 
@@ -120,8 +120,9 @@ For build-time variation, traits pull in machinery that isn't needed:
 | Polylith component swap | yes | direct call (compile) | no | none — callers see plain functions |
 
 With Polylith, a component exposes plain public functions. A consumer calls them directly.
-At build time, `[patch.crates-io]` substitutes the entire component with a different
-implementation that has the same public API. The compiler enforces compatibility. No vtable.
+At build time, a project declares `interface-name = { path = "...", package = "..." }` to
+select which component implementation is compiled in. The compiler enforces compatibility.
+No vtable.
 No `Box`. No generic bounds propagating through every function that touches the abstraction.
 
 The trade-off is explicit: **one implementation per binary**. That is rarely a constraint
