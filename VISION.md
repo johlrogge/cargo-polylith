@@ -37,8 +37,9 @@ values, but we do not use them as an excuse to abandon Polylith's architectural 
 - **No semantic versioning between bricks.** Internal bricks use `path = "..."` dependencies.
   Semver applies only at the project boundary when consuming external crates. Components are
   never individually published to crates.io.
-- **Components depend on interfaces, not on each other directly.** Only bases wire components
-  together.
+- **Bricks depend on interfaces.** Components and bases may depend on other components, but
+  they do so by referencing the interface (crate name), never a specific implementation.
+  Projects select which implementation is active via `[patch.crates-io]`.
 - **Fast feedback.** The development project builds all bricks; `cargo polylith check` requires
   no compilation.
 
@@ -83,10 +84,52 @@ These are the architectural rules cargo-polylith enforces or warns about. They a
 negotiable adaptations — they are the Polylith model itself:
 
 - The four building blocks and their relationships (component, base, project, development project)
-- No direct component-on-component dependencies — components are wired together only by bases
+- Bricks depend on interfaces (crate names), never on specific implementations
 - The development project (root workspace) contains all bricks
 - A base must expose a library API (`src/lib.rs`) and must not have `src/main.rs`
 - `cargo polylith check` is a fast, compilation-free structural pre-flight
+
+---
+
+## Polylith as an alternative to traits and generics
+
+Rust developers instinctively reach for traits when they need swappable behaviour:
+
+```rust
+trait Storage { fn save(&self, item: Item); }
+struct PostgresStorage;
+struct InMemoryStorage;
+impl Storage for PostgresStorage { ... }
+impl Storage for InMemoryStorage { ... }
+```
+
+This is the right tool when multiple implementations must coexist in the same running process
+(e.g. routing requests to different backends simultaneously). But much of what looks like
+runtime variation in application code is actually **build-time variation**:
+
+- In-memory storage for tests, Postgres for production
+- Stub HTTP client in dev, real client in prod
+- Simplified audio backend for CI, PipeWire for deployment
+
+For build-time variation, traits pull in machinery that isn't needed:
+
+| Pattern | Abstraction | Dispatch | Heap | Signature complexity |
+|---|---|---|---|---|
+| `dyn Trait` | yes | vtable (runtime) | `Box<dyn>` per value | leaks into callers |
+| generics `T: Trait` | yes | monomorphized (compile) | no | bounds infect every caller |
+| Polylith component swap | yes | direct call (compile) | no | none — callers see plain functions |
+
+With Polylith, a component exposes plain public functions. A consumer calls them directly.
+At build time, `[patch.crates-io]` substitutes the entire component with a different
+implementation that has the same public API. The compiler enforces compatibility. No vtable.
+No `Box`. No generic bounds propagating through every function that touches the abstraction.
+
+The trade-off is explicit: **one implementation per binary**. That is rarely a constraint
+for application code. It is the wrong tool when you genuinely need runtime polymorphism.
+
+This insight is particularly relevant for Rust: a common source of `dyn Trait`, `Arc<dyn>`,
+and generic type parameter sprawl in application codebases is build-time variation that
+Polylith can handle more simply and at zero runtime cost.
 
 ---
 

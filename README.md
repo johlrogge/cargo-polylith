@@ -11,6 +11,33 @@ Polylith's model for Rust.
 
 ---
 
+## Why Polylith?
+
+Rust developers typically reach for **traits and generics** when they need swappable
+behaviour. Polylith offers a complementary approach: swap entire component implementations
+at build time, with no runtime overhead.
+
+|  | `dyn Trait` | generics | Polylith swap |
+|---|---|---|---|
+| Abstraction | yes | yes | yes |
+| Dispatch | vtable (runtime) | monomorphized | direct call |
+| Heap pressure | `Box<dyn>` per value | none | none |
+| Caller complexity | leaks `dyn`/`Arc` | bounds infect every caller | none — plain functions |
+| Multiple impls active simultaneously | yes | yes | no (one per binary) |
+
+The limitation — one implementation per binary — is rarely a constraint for application
+code. Most "I need swappable storage/transport/client" situations in applications are
+actually build-time choices: tests use in-memory, production uses Postgres. Polylith makes
+that explicit and free.
+
+When you do need multiple implementations active simultaneously at runtime (e.g. routing
+to different backends in the same process), traits are the right tool. Polylith and traits
+are complementary, not competing.
+
+See [VISION.md](VISION.md) for a deeper treatment of when each approach fits.
+
+---
+
 ## The polylith model — our Rust interpretation
 
 Polylith organises code into four building blocks:
