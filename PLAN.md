@@ -231,6 +231,9 @@ Mirror of component: `bases/<name>/src/main.rs`, `[[bin]]` in Cargo.toml.
 
 - `cargo polylith check` — interface compatibility via `syn` parsing of `lib.rs`.
 - `cargo polylith edit` — TUI project composer using `ratatui`.
+- `cargo polylith mcp serve` — MCP server over stdin/stdout; exposes `polylith_info`,
+  `polylith_deps`, `polylith_check`, `polylith_status` tools. Shares `src/workspace/`
+  directly — no separate crate. See ROADMAP.md.
 
 ---
 
