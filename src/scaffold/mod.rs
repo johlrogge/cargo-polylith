@@ -95,6 +95,64 @@ pub fn create_project(root: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Set `[patch.crates-io].<interface> = { path = "<rel>" }` in a project's `Cargo.toml`,
+/// creating the `[patch]` and `[patch.crates-io]` tables if they don't exist.
+/// The path written is relative from `project_path/` to `component_path/`.
+pub fn set_project_patch(
+    project_path: &Path,
+    interface: &str,
+    component_path: &Path,
+) -> Result<()> {
+    let manifest_path = project_path.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let mut doc: DocumentMut = content.parse().context("parsing project Cargo.toml")?;
+
+    let rel = relative_path(project_path, component_path);
+    let rel_str = rel.to_string_lossy();
+
+    // Ensure [patch] table
+    if doc.get("patch").is_none() {
+        doc["patch"] = toml_edit::table();
+    }
+    // Ensure [patch.crates-io] table
+    if doc["patch"].get("crates-io").is_none() {
+        doc["patch"]["crates-io"] = toml_edit::table();
+    }
+
+    // Set the inline table: interface = { path = "..." }
+    let mut tbl = toml_edit::InlineTable::new();
+    tbl.insert("path", toml_edit::Value::from(rel_str.as_ref()));
+    doc["patch"]["crates-io"][interface] =
+        toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl));
+
+    fs::write(&manifest_path, doc.to_string())
+        .with_context(|| format!("writing {}", manifest_path.display()))?;
+    Ok(())
+}
+
+/// Compute a relative path from `from_dir` to `to_dir` (both absolute).
+/// Walks up with `..` components until a common ancestor is found, then appends
+/// the remaining suffix of `to_dir`.
+fn relative_path(from_dir: &Path, to_dir: &Path) -> std::path::PathBuf {
+    use std::path::PathBuf;
+
+    let from: Vec<_> = from_dir.components().collect();
+    let to: Vec<_> = to_dir.components().collect();
+
+    let common = from.iter().zip(to.iter()).take_while(|(a, b)| a == b).count();
+
+    let up = from.len() - common;
+    let mut rel = PathBuf::new();
+    for _ in 0..up {
+        rel.push("..");
+    }
+    for part in &to[common..] {
+        rel.push(part);
+    }
+    rel
+}
+
 /// Append a member path to the root workspace `Cargo.toml` `[workspace].members` array
 /// using `toml_edit` to preserve existing comments and formatting.
 fn add_workspace_member(root: &Path, member: &str) -> Result<()> {

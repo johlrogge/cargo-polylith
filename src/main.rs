@@ -56,7 +56,7 @@ fn main() {
         PolylithCommand::Mcp { action } => {
             use cli::McpAction;
             match action {
-                McpAction::Serve => commands::mcp::serve(workspace_root),
+                McpAction::Serve { write } => commands::mcp::serve(workspace_root, write),
             }
         }
     };

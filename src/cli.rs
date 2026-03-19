@@ -94,7 +94,11 @@ pub enum GenerateAction {
 #[derive(Subcommand)]
 pub enum McpAction {
     /// Start the MCP server (JSON-RPC 2.0 over stdin/stdout)
-    Serve,
+    Serve {
+        /// Enable write tools (scaffold components/bases/projects, patch implementations)
+        #[arg(long)]
+        write: bool,
+    },
 }
 
 #[derive(Subcommand)]
