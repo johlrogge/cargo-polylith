@@ -346,8 +346,7 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
                         dep_paths.push((k.to_string(), path.join(&rel)));
                     } else if !is_workspace_dep(v) {
                         // External dep — capture features and version for drift checks.
-                        let mut features = extract_features(v);
-                        features.sort();
+                        let features = extract_features(v);
                         let version = extract_version(v);
                         external_deps.insert(k.to_string(), ExternalDepInfo { features, version });
                     }

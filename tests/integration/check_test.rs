@@ -959,3 +959,15 @@ fn check_workspace_true_dep_no_violation() {
         .stdout(predicate::str::contains("project-feature-drift").not())
         .stdout(predicate::str::contains("project-version-drift").not());
 }
+
+#[test]
+fn check_project_feature_drift_disjoint_is_warning() {
+    // Project has ["derive", "extra"], workspace has ["derive", "alloc"].
+    // Neither is a subset of the other, but project is missing "alloc" → warning.
+    let tmp = init_drift_workspace(&["derive", "alloc"], "1.0", &["derive", "extra"], "1.0");
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()  // warning → exit 0
+        .stdout(predicate::str::contains("project-feature-drift"));
+}

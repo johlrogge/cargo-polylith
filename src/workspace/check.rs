@@ -346,13 +346,18 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
 
     // --- project standalone dep drift checks (B & C) ---
     for project in &map.projects {
-        for (dep, proj_info) in &project.external_deps {
+        let mut ext_deps: Vec<_> = project.external_deps.iter().collect();
+        ext_deps.sort_by_key(|(k, _)| k.as_str());
+        for (dep, proj_info) in ext_deps {
             let Some(ws_info) = map.root_workspace_deps.get(dep) else { continue };
 
-            // Check B: feature drift — project features are a strict subset of workspace features
+            // Check B: feature drift — workspace has features the project does not
             let proj_set: std::collections::HashSet<_> = proj_info.features.iter().collect();
-            let ws_set: std::collections::HashSet<_> = ws_info.features.iter().collect();
-            if proj_set.is_subset(&ws_set) && proj_set != ws_set {
+            let missing: Vec<String> = ws_info.features.iter()
+                .filter(|f| !proj_set.contains(f))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
                 violations.push(Violation {
                     kind: ViolationKind::ProjectFeatureDrift {
                         project: project.name.clone(),
@@ -361,9 +366,8 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
                         workspace_features: ws_info.features.clone(),
                     },
                     message: format!(
-                        "project '{}': dep '{}' features {:?} are a subset of workspace features {:?} \
-                         — standalone build may be missing features",
-                        project.name, dep, proj_info.features, ws_info.features,
+                        "project '{}': dep '{}' standalone build is missing workspace features {:?}",
+                        project.name, dep, missing,
                     ),
                 });
             }
@@ -394,19 +398,22 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
 
 /// Returns `true` for violation kinds that are warnings (exit 0), `false` for hard errors.
 pub fn is_warning_kind(k: &ViolationKind) -> bool {
-    matches!(
-        k,
-        ViolationKind::OrphanComponent
-            | ViolationKind::WildcardReExport
-            | ViolationKind::BaseHasMainRs
-            | ViolationKind::ProjectMissingBase
-            | ViolationKind::NotInRootWorkspace
-            | ViolationKind::AmbiguousInterface
-            | ViolationKind::DuplicateName
-            | ViolationKind::MissingInterface
-            | ViolationKind::ProjectFeatureDrift { .. }
-            | ViolationKind::ProjectVersionDrift { .. }
-    )
+    match k {
+        ViolationKind::OrphanComponent => true,
+        ViolationKind::WildcardReExport => true,
+        ViolationKind::BaseHasMainRs => true,
+        ViolationKind::ProjectMissingBase => true,
+        ViolationKind::NotInRootWorkspace => true,
+        ViolationKind::AmbiguousInterface => true,
+        ViolationKind::DuplicateName => true,
+        ViolationKind::MissingInterface => true,
+        ViolationKind::ProjectFeatureDrift { .. } => true,
+        ViolationKind::ProjectVersionDrift { .. } => true,
+        ViolationKind::MissingLibRs => false,
+        ViolationKind::MissingImplFile => false,
+        ViolationKind::BaseMissingLibRs => false,
+        ViolationKind::DepKeyMismatch { .. } => false,
+    }
 }
 
 /// Returns true if `pattern` (a root workspace members entry) covers `rel_path`
