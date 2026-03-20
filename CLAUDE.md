@@ -44,11 +44,17 @@ Cargo calls `cargo-polylith polylith <args>` (subcommand name is repeated).
 The clap setup uses `#[command(bin_name = "cargo")]` with a `Polylith` variant
 in `CargoCommand` to handle this transparently.
 
-## This Project Does Not Use Polylith Itself
+## Polylith Is for Applications, Not Published Crates
 
-`cargo-polylith` is intentionally structured as a **flat single-crate workspace** and must stay that way.
+`cargo-polylith` is intentionally structured as a **flat single-crate workspace** and must stay that way — and this is the *correct* choice, not a limitation.
 
-The polylith model relies on path dependencies between components/bases. `cargo publish` does not allow path dependencies — it requires all dependencies to be versioned crates on crates.io. Migrating this project to its own polylith model would require publishing every internal component as a separate crate (with globally unique names), making releases significantly more complex with no meaningful benefit for a single-binary tool.
+**Polylith shines for applications** where you own all the code, build everything in one workspace, and never need to publish internal components to crates.io. The single-workspace model with path dependencies is exactly the right fit for that context.
+
+**"Use before reuse"**: prove a component's general value inside the workspace first, across multiple bases and projects. Only once that value is proven does it make sense to promote the component to a standalone published crate. This is a natural graduation path — not a failure of the model.
+
+`cargo-polylith` itself is already at that graduation point: it IS a published crate (`cargo install cargo-polylith`). Path dependencies between internal components would require publishing each as a separate crate with a globally unique name — significant release complexity with no meaningful benefit for a single-binary tool.
+
+A future roadmap item will allow importing a crates.io library to act as a component behind a named interface — the inverse direction.
 
 Do not attempt to migrate this project to polylith architecture.
 

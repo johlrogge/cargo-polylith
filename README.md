@@ -301,6 +301,7 @@ cargo polylith check
 |---|---|
 | `missing-lib` | Component or base has no `src/lib.rs` |
 | `missing-impl` | Component has no `src/lib.rs` AND no `src/<name>.rs` |
+| `dep-key-mismatch` | A path dependency key does not match the target crate's `package.name` — use the correct name as the dep key, or add `package = "..."` as an alias |
 
 **Warnings** (exit 0):
 
@@ -317,6 +318,80 @@ cargo polylith check
 
 Flags:
 - `--json` — machine-readable output (`{"violations": [...]}`)
+
+---
+
+### `cargo polylith edit`
+
+Interactive terminal UI for composing project dependencies.
+
+```
+cargo polylith edit
+```
+
+Displays a dependency grid — rows are components and bases, columns are projects. Each cell shows whether the brick is a direct dependency (`x`), transitive dependency (`·`), or not used (`-`).
+
+**Transitive hover:** when the cursor rests on a transitive cell (`·`), the status bar shows the dependency chain that explains *why* the brick is pulled in — for example:
+
+```
+scaffold via: myproject → cli (base) → mcp → scaffold
+```
+
+Key bindings:
+
+| Key | Action |
+|---|---|
+| `←→↑↓` / `hjkl` | Navigate |
+| `Space` | Toggle direct dependency on/off |
+| `i` | Edit the component's interface name (Enter to save, Esc to cancel) |
+| `w` | Write changes to disk |
+| `n` | Create a new project |
+| `q` / `Esc` | Quit |
+
+---
+
+### `cargo polylith mcp serve`
+
+Runs cargo-polylith as a [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server, exposing workspace analysis to AI assistants and other MCP clients.
+
+```
+cargo polylith mcp serve
+cargo polylith mcp serve --write   # also enable scaffolding tools
+```
+
+Communicates over stdin/stdout using the standard MCP JSON-RPC transport.
+
+**Read-only tools (always available):**
+
+| Tool | Description |
+|---|---|
+| `polylith_info` | Workspace summary — components, bases, and projects |
+| `polylith_deps` | Dependency graph, optionally filtered by brick name |
+| `polylith_check` | Violations and warnings |
+| `polylith_status` | Structural health summary |
+
+**Write tools (enabled with `--write`):**
+
+| Tool | Description |
+|---|---|
+| `polylith_component_new` | Create a new component crate |
+| `polylith_base_new` | Create a new base crate |
+| `polylith_project_new` | Create a new project workspace |
+| `polylith_component_update` | Update a component's interface annotation |
+| `polylith_set_implementation` | Select a component implementation for a project |
+
+To wire up an AI assistant (e.g. Claude Code), add to `.mcp.json` at the workspace root:
+
+```json
+{
+  "mcpServers": {
+    "cargo-polylith": {
+      "command": "cargo-polylith",
+      "args": ["polylith", "mcp", "serve"]
+    }
+  }
+}
+```
 
 ---
 

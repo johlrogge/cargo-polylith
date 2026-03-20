@@ -1,20 +1,11 @@
 # Roadmap
 
-## Now — MCP server (`cargo polylith mcp serve`)
+## Now — TUI polish and model alignment
 
-Expose workspace analysis over the Model Context Protocol as a built-in subcommand.
-Shares `src/workspace/` directly — no separate project, no drift.
+MCP server (`cargo polylith mcp serve`) is shipped ✅ — read-only and write tools,
+stdin/stdout JSON-RPC transport, wires directly into Claude Code and other MCP clients.
 
-Tools to expose:
-- `polylith_info` — workspace summary (components, bases, projects)
-- `polylith_deps` — dependency graph, optionally filtered by brick
-- `polylith_check` — violations and warnings
-- `polylith_status` — structural health summary
-
-Invoked as `cargo polylith mcp serve` (stdin/stdout, standard MCP transport).
-`.mcp.json` points at the installed binary — no separate server to maintain.
-
-## Next — TUI polish and model alignment
+## Next — model alignment
 
 ### ⚠️ Model correction: projects as bin crates, workspace as profile [HIGHEST PRIORITY]
 
@@ -72,19 +63,12 @@ ensure they reflect the current feature set (MCP server, TUI edit, check hardeni
 
 ### `cargo polylith check` hardening
 
-#### Dep key / package name mismatch (bug fix, do first)
+#### Dep key / package name mismatch ✅
 In `resolver = "2"` standalone project workspaces, a path dependency key must exactly
 match the target's `package.name` — hyphens and underscores are NOT interchangeable.
 A mismatch silently builds from the root workspace but fails in standalone project builds
-with a confusing "no matching package found" error.
-
-The tool already reads all the data needed. Requires retaining the raw dep key alongside
-the resolved path during `scan_projects`, then adding a check loop in `run_checks`:
-for each project path dep, resolve the path, read `package.name`, compare to the key
-(accounting for legitimate `package = "..."` aliases). Report as a hard violation.
-
-Survives the model correction — the check logic is unchanged whether projects are
-sub-workspaces or bin crates.
+with a confusing "no matching package found" error. Now detected as a hard violation
+(`dep-key-mismatch`).
 
 #### Other hardening
 More violation kinds, clearer messages, better guidance text.
@@ -93,7 +77,21 @@ More violation kinds, clearer messages, better guidance text.
 After model correction is implemented and validated with Joakim, and TUI is solid.
 Requires coordination before cutting the release.
 
-## Future — LSP server (`cargo polylith lsp serve`)
+## Future
+
+### Import crates.io library as a polylith component
+
+Allow a component's implementation to be backed by a published crates.io crate rather
+than local source. The component declares a named interface; the implementation is
+`<crate-name> = { version = "...", package = "..." }` in the project's `[dependencies]`.
+`cargo polylith check` would validate the mapping.
+
+This is the inverse of "promoting a component to a standalone crate" — it lets teams
+adopt external libraries within the polylith model without losing the named-interface
+abstraction. A natural graduation path: prove a component's value locally, then swap in
+a battle-tested crates.io crate behind the same interface.
+
+### LSP server (`cargo polylith lsp serve`)
 
 A Language Server Protocol server for Cargo.toml files, with polylith awareness.
 No Cargo.toml LSP exists today; this would fill a genuine gap.
