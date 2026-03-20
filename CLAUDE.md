@@ -44,6 +44,14 @@ Cargo calls `cargo-polylith polylith <args>` (subcommand name is repeated).
 The clap setup uses `#[command(bin_name = "cargo")]` with a `Polylith` variant
 in `CargoCommand` to handle this transparently.
 
+## This Project Does Not Use Polylith Itself
+
+`cargo-polylith` is intentionally structured as a **flat single-crate workspace** and must stay that way.
+
+The polylith model relies on path dependencies between components/bases. `cargo publish` does not allow path dependencies — it requires all dependencies to be versioned crates on crates.io. Migrating this project to its own polylith model would require publishing every internal component as a separate crate (with globally unique names), making releases significantly more complex with no meaningful benefit for a single-binary tool.
+
+Do not attempt to migrate this project to polylith architecture.
+
 ## No Compilation of User Code
 
 All analysis is pure TOML + filesystem. No `cargo metadata` invocation.
