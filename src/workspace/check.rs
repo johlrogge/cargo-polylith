@@ -38,6 +38,14 @@ pub enum ViolationKind {
     DuplicateName,
     /// A component has no `interface` declared in `[package.metadata.polylith]`.
     MissingInterface,
+    /// A project's path dependency key doesn't match the target's `package.name`
+    /// and no `package = "..."` alias was provided.
+    DepKeyMismatch {
+        project: String,
+        dep_key: String,
+        expected_name: String,
+        path: String,
+    },
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -166,6 +174,42 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
                     project.name
                 ),
             });
+        }
+    }
+
+    // --- dep key mismatch checks ---
+    // For every path dep in a project that has no package alias, the dep key must
+    // match the target crate's package.name exactly.
+    for project in &map.projects {
+        for (dep_key, dep_path) in &project.dep_paths {
+            let cargo_toml = dep_path.join("Cargo.toml");
+            if !cargo_toml.exists() {
+                continue;
+            }
+            let pkg_name = match cargo_toml::Manifest::from_path(&cargo_toml) {
+                Ok(m) => match m.package.map(|p| p.name) {
+                    Some(n) => n,
+                    None => continue,
+                },
+                Err(_) => continue,
+            };
+            if dep_key != &pkg_name {
+                violations.push(Violation {
+                    kind: ViolationKind::DepKeyMismatch {
+                        project: project.name.clone(),
+                        dep_key: dep_key.clone(),
+                        expected_name: pkg_name.clone(),
+                        path: dep_path.to_string_lossy().into_owned(),
+                    },
+                    message: format!(
+                        "project '{}': dep key '{}' does not match package name '{}' at {} \
+                         — use the correct package name as the dep key, or add `package = \"{}\"` as an alias",
+                        project.name, dep_key, pkg_name,
+                        dep_path.display(),
+                        pkg_name,
+                    ),
+                });
+            }
         }
     }
 

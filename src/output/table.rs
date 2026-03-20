@@ -149,6 +149,7 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::BaseMissingLibRs     => "missing-lib".red().to_string(),
             ViolationKind::MissingLibRs         => "missing-lib".red().to_string(),
             ViolationKind::MissingImplFile      => "missing-impl".red().to_string(),
+            ViolationKind::DepKeyMismatch { .. } => "dep-key-mismatch".red().to_string(),
         };
         println!("  [{tag}] {}", v.message);
     }
