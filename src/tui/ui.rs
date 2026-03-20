@@ -255,9 +255,13 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         .zip(app.rows.get(app.cursor_row))
         .map(|(col, row)| format!("  [{}/{}]", col.name, row.name))
         .unwrap_or_default();
-    let text = format!("{}{}", app.status, cursor_info);
+    let status_text = if let Some(chain) = app.transitive_chain_for_cursor() {
+        format!("{}{}", chain, cursor_info)
+    } else {
+        format!("{}{}", app.status, cursor_info)
+    };
     frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray)),
         area,
     );
 }

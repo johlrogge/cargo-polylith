@@ -596,6 +596,161 @@ fn init_valid_workspace() -> TempDir {
     tmp
 }
 
+// ── dep key mismatch (hard error) ─────────────────────────────────────────────
+
+#[test]
+fn check_dep_key_mismatch_is_hard_error() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+    ).unwrap();
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
+
+    // Component whose package name uses underscores
+    let comp = tmp.path().join("components/storage_primitives");
+    fs::create_dir_all(comp.join("src")).unwrap();
+    fs::write(comp.join("src/lib.rs"), "pub struct S;\n").unwrap();
+    fs::write(
+        comp.join("Cargo.toml"),
+        "[package]\nname = \"storage_primitives\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [package.metadata.polylith]\ninterface = \"storage-primitives\"\n",
+    ).unwrap();
+
+    // Base with lib.rs
+    let base = tmp.path().join("bases/mybase");
+    fs::create_dir_all(base.join("src")).unwrap();
+    fs::write(base.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        base.join("Cargo.toml"),
+        "[package]\nname = \"mybase\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [dependencies]\nstorage_primitives = { path = \"../../components/storage_primitives\" }\n",
+    ).unwrap();
+
+    // Project uses hyphenated dep key (mismatches the underscore package name)
+    let proj = tmp.path().join("projects/beacon");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n\
+         [package]\nname = \"beacon\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"beacon\"\npath = \"src/main.rs\"\n\
+         [dependencies]\nmybase = { path = \"../../bases/mybase\" }\n\
+         storage-primitives = { path = \"../../components/storage_primitives\" }\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .failure()  // hard error → exit 1
+        .stdout(predicate::str::contains("dep-key-mismatch"));
+}
+
+#[test]
+fn check_dep_key_matching_package_name_passes() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+    ).unwrap();
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
+
+    // Component whose package name uses underscores
+    let comp = tmp.path().join("components/storage_primitives");
+    fs::create_dir_all(comp.join("src")).unwrap();
+    fs::write(comp.join("src/lib.rs"), "pub struct S;\n").unwrap();
+    fs::write(
+        comp.join("Cargo.toml"),
+        "[package]\nname = \"storage_primitives\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [package.metadata.polylith]\ninterface = \"storage-primitives\"\n",
+    ).unwrap();
+
+    // Base with lib.rs
+    let base = tmp.path().join("bases/mybase");
+    fs::create_dir_all(base.join("src")).unwrap();
+    fs::write(base.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        base.join("Cargo.toml"),
+        "[package]\nname = \"mybase\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [dependencies]\nstorage_primitives = { path = \"../../components/storage_primitives\" }\n",
+    ).unwrap();
+
+    // Project uses the correct package name as dep key
+    let proj = tmp.path().join("projects/beacon");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n\
+         [package]\nname = \"beacon\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"beacon\"\npath = \"src/main.rs\"\n\
+         [dependencies]\nmybase = { path = \"../../bases/mybase\" }\n\
+         storage_primitives = { path = \"../../components/storage_primitives\" }\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dep-key-mismatch").not());
+}
+
+#[test]
+fn check_dep_key_mismatch_with_package_alias_passes() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+    ).unwrap();
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
+
+    // Component with underscore name
+    let comp = tmp.path().join("components/storage_primitives");
+    fs::create_dir_all(comp.join("src")).unwrap();
+    fs::write(comp.join("src/lib.rs"), "pub struct S;\n").unwrap();
+    fs::write(
+        comp.join("Cargo.toml"),
+        "[package]\nname = \"storage_primitives\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [package.metadata.polylith]\ninterface = \"storage-primitives\"\n",
+    ).unwrap();
+
+    // Base
+    let base = tmp.path().join("bases/mybase");
+    fs::create_dir_all(base.join("src")).unwrap();
+    fs::write(base.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        base.join("Cargo.toml"),
+        "[package]\nname = \"mybase\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [dependencies]\nstorage_primitives = { path = \"../../components/storage_primitives\" }\n",
+    ).unwrap();
+
+    // Project uses hyphenated dep key BUT provides explicit package alias — NOT a violation
+    let proj = tmp.path().join("projects/beacon");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n\
+         [package]\nname = \"beacon\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"beacon\"\npath = \"src/main.rs\"\n\
+         [dependencies]\nmybase = { path = \"../../bases/mybase\" }\n\
+         storage-primitives = { path = \"../../components/storage_primitives\", package = \"storage_primitives\" }\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dep-key-mismatch").not());
+}
+
 // ── not-in-workspace-members (warning, not error) ─────────────────────────────
 
 #[test]

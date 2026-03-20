@@ -63,6 +63,10 @@ pub struct App {
     pub input_buffer: String,
     /// Component dependency graph — used to recompute transitive states on toggle.
     comp_deps: HashMap<String, Vec<String>>,
+    /// Direct deps per project column (indexed by col).
+    project_direct_deps: Vec<Vec<String>>,
+    /// Set of base names for annotating chains.
+    base_names: HashSet<String>,
 }
 
 impl App {
@@ -99,11 +103,15 @@ impl App {
             .map(|p| GridCol { name: p.name.clone(), path: p.path.clone() })
             .collect();
 
-        let comp_deps: HashMap<String, Vec<String>> = map
+        let mut comp_deps: HashMap<String, Vec<String>> = map
             .components
             .iter()
             .map(|c| (c.name.clone(), c.deps.clone()))
             .collect();
+        // Include base deps so transitive resolution works when projects depend on bases.
+        for b in &map.bases {
+            comp_deps.insert(b.name.clone(), b.deps.clone());
+        }
 
         // Build cells: compute direct and transitive deps per project column.
         let n_rows = rows.len();
@@ -125,6 +133,18 @@ impl App {
 
         let modified_cols = vec![false; n_cols];
         let modified_rows = vec![false; n_rows];
+
+        let project_direct_deps: Vec<Vec<String>> = map
+            .projects
+            .iter()
+            .map(|p| p.deps.clone())
+            .collect();
+
+        let base_names: HashSet<String> = map
+            .bases
+            .iter()
+            .map(|b| b.name.clone())
+            .collect();
 
         let status = if cols.is_empty() {
             "n: new project  q: quit".into()
@@ -148,6 +168,8 @@ impl App {
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
             comp_deps,
+            project_direct_deps,
+            base_names,
         })
     }
 
@@ -320,6 +342,37 @@ impl App {
         self.status = "Interface staged — press w to write.  ←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit".into();
     }
 
+    /// If the cursor is on a `Transitive` cell, returns a human-readable string
+    /// describing the dependency chain, e.g.:
+    /// `"scaffold via: myproject → cli (base) → mcp → scaffold"`
+    /// Returns `None` if the cursor is not on a Transitive cell or if no chain
+    /// can be found.
+    pub fn transitive_chain_for_cursor(&self) -> Option<String> {
+        let r = self.cursor_row;
+        let c = self.cursor_col;
+        let state = self.cells.get(r)?.get(c).copied()?;
+        if state != DepState::Transitive {
+            return None;
+        }
+        let target = &self.rows.get(r)?.name;
+        let project_name = &self.cols.get(c)?.name;
+        let direct = self.project_direct_deps.get(c)?;
+        let chain = find_chain(target, direct, &self.comp_deps, &self.base_names)?;
+        // Format: "scaffold via: myproject → cli (base) → mcp → scaffold"
+        let steps: Vec<String> = chain
+            .iter()
+            .map(|name| {
+                if self.base_names.contains(name.as_str()) {
+                    format!("{} (base)", name)
+                } else {
+                    name.clone()
+                }
+            })
+            .collect();
+        let path_str = steps.join(" \u{2192} ");
+        Some(format!("{} via: {} \u{2192} {}", target, project_name, path_str))
+    }
+
     pub fn write_all(&mut self) -> Result<()> {
         let mut written = 0usize;
         for col_i in 0..self.cols.len() {
@@ -445,9 +498,57 @@ fn is_brick_dep(deps: &toml_edit::Table, name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// BFS from `direct` deps, recording parent pointers, returning the shortest
+/// path from a direct dep to `target` (not including the project name itself —
+/// the caller prepends it). Returns `None` if `target` is not reachable.
+///
+/// The returned `Vec` contains only the brick names in the chain from the first
+/// direct dep that reaches `target` through to `target` itself, e.g.:
+/// `["cli", "mcp", "scaffold"]`.
+fn find_chain(
+    target: &str,
+    direct: &[String],
+    all_deps: &HashMap<String, Vec<String>>,
+    _base_names: &HashSet<String>,
+) -> Option<Vec<String>> {
+    // BFS — each queue entry is a brick name; parent map tracks how we got there.
+    let mut parent: HashMap<String, Option<String>> = HashMap::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+
+    for d in direct {
+        if !parent.contains_key(d.as_str()) {
+            parent.insert(d.clone(), None);
+            queue.push_back(d.clone());
+        }
+    }
+
+    while let Some(current) = queue.pop_front() {
+        if current == target {
+            // Reconstruct path from target back to a direct dep.
+            let mut path = vec![current.clone()];
+            let mut node = current.clone();
+            while let Some(Some(p)) = parent.get(&node) {
+                path.push(p.clone());
+                node = p.clone();
+            }
+            path.reverse();
+            return Some(path);
+        }
+        if let Some(deps) = all_deps.get(&current) {
+            for dep in deps {
+                if !parent.contains_key(dep.as_str()) {
+                    parent.insert(dep.clone(), Some(current.clone()));
+                    queue.push_back(dep.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// BFS from `direct` through `comp_deps`, returning all transitively reachable
 /// names that are NOT in `direct` itself.
-fn compute_transitive(
+pub(crate) fn compute_transitive(
     direct: &HashSet<String>,
     comp_deps: &HashMap<String, Vec<String>>,
 ) -> HashSet<String> {
@@ -466,4 +567,67 @@ fn compute_transitive(
     }
     reachable.retain(|n| !direct.contains(n));
     reachable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_deps(entries: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
+        entries
+            .iter()
+            .map(|(k, vs)| (k.to_string(), vs.iter().map(|v| v.to_string()).collect()))
+            .collect()
+    }
+
+    fn empty_bases() -> HashSet<String> {
+        HashSet::new()
+    }
+
+    /// Simple linear chain: direct = [A], A→B, B→C. find_chain("C") = [A, B, C].
+    #[test]
+    fn test_find_chain_simple() {
+        let all_deps = make_deps(&[("a", &["b"]), ("b", &["c"])]);
+        let direct = vec!["a".to_string()];
+        let result = find_chain("c", &direct, &all_deps, &empty_bases());
+        assert_eq!(result, Some(vec!["a".to_string(), "b".to_string(), "c".to_string()]));
+    }
+
+    /// Diamond: direct = [A], A→B, A→C, B→D, C→D. BFS shortest path to D has length 2.
+    #[test]
+    fn test_find_chain_diamond() {
+        let all_deps = make_deps(&[("a", &["b", "c"]), ("b", &["d"]), ("c", &["d"])]);
+        let direct = vec!["a".to_string()];
+        let result = find_chain("d", &direct, &all_deps, &empty_bases());
+        // Shortest path must be length 3 (A → B or C → D)
+        let chain = result.expect("should find a chain");
+        assert_eq!(chain.len(), 3);
+        assert_eq!(chain[0], "a");
+        assert_eq!(*chain.last().unwrap(), "d");
+    }
+
+    /// Base in the chain — find_chain itself doesn't annotate; annotation is done
+    /// by transitive_chain_for_cursor. We just verify the chain contains the base name.
+    #[test]
+    fn test_find_chain_base_in_chain() {
+        let mut base_names: HashSet<String> = HashSet::new();
+        base_names.insert("cli".to_string());
+
+        let all_deps = make_deps(&[("cli", &["mcp"]), ("mcp", &["scaffold"])]);
+        let direct = vec!["cli".to_string()];
+        let result = find_chain("scaffold", &direct, &all_deps, &base_names);
+        assert_eq!(
+            result,
+            Some(vec!["cli".to_string(), "mcp".to_string(), "scaffold".to_string()])
+        );
+    }
+
+    /// Target is not reachable — should return None.
+    #[test]
+    fn test_find_chain_not_reachable() {
+        let all_deps = make_deps(&[("a", &["b"])]);
+        let direct = vec!["a".to_string()];
+        let result = find_chain("z", &direct, &all_deps, &empty_bases());
+        assert_eq!(result, None);
+    }
 }

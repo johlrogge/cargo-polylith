@@ -205,11 +205,42 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
                 });
             pkg.unwrap_or(k).to_string()
         };
+        // Helper: extract the `path = "..."` value from a dep item (inline table or regular table).
+        let extract_path = |v: &toml_edit::Item| -> Option<String> {
+            v.as_value()
+                .and_then(|v| v.as_inline_table())
+                .and_then(|it| it.get("path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    v.as_table()
+                        .and_then(|t| t.get("path"))
+                        .and_then(|v| v.as_value())
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+        };
+        // Helper: check whether a dep item has an explicit `package = "..."` alias.
+        let has_package_alias = |v: &toml_edit::Item| -> bool {
+            v.as_value()
+                .and_then(|v| v.as_inline_table())
+                .and_then(|it| it.get("package"))
+                .is_some()
+                || v.as_table()
+                    .and_then(|t| t.get("package"))
+                    .is_some()
+        };
         let mut dep_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut dep_paths: Vec<(String, PathBuf)> = vec![];
         // [dependencies] — direct deps of the project binary
         if let Some(t) = doc.get("dependencies").and_then(|t| t.as_table()) {
             for (k, v) in t.iter() {
                 dep_set.insert(resolve_pkg_name(k, v));
+                if !has_package_alias(v) {
+                    if let Some(rel) = extract_path(v) {
+                        dep_paths.push((k.to_string(), path.join(&rel)));
+                    }
+                }
             }
         }
         // [workspace.dependencies] — inherited by bases listed as workspace members;
@@ -221,6 +252,11 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
         {
             for (k, v) in t.iter() {
                 dep_set.insert(resolve_pkg_name(k, v));
+                if !has_package_alias(v) {
+                    if let Some(rel) = extract_path(v) {
+                        dep_paths.push((k.to_string(), path.join(&rel)));
+                    }
+                }
             }
         }
         let deps: Vec<String> = dep_set.into_iter().collect();
@@ -275,6 +311,7 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             members,
             patches,
             test_project,
+            dep_paths,
         });
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));
