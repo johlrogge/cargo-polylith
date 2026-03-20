@@ -179,7 +179,59 @@ fn project_new_creates_cargo_toml() {
     assert!(p.exists(), "project Cargo.toml missing");
 
     let content = fs::read_to_string(&p).unwrap();
-    assert!(content.contains("[workspace]"), "missing [workspace] section");
+    assert!(content.contains("[package]"), "missing [package] section");
+    assert!(content.contains("[[bin]]"), "missing [[bin]] section");
+}
+
+#[test]
+fn project_new_adds_to_root_workspace_members() {
+    let dir = TempDir::new().unwrap();
+    init_workspace(&dir);
+
+    cargo_polylith()
+        .args(["polylith", "project", "new", "foo"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let root_toml = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(
+        root_toml.contains("projects/foo"),
+        "root Cargo.toml missing workspace member for project: {root_toml}"
+    );
+}
+
+#[test]
+fn project_new_creates_src_main_rs() {
+    let dir = TempDir::new().unwrap();
+    init_workspace(&dir);
+
+    cargo_polylith()
+        .args(["polylith", "project", "new", "foo"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let main_rs = dir.path().join("projects/foo/src/main.rs");
+    assert!(main_rs.exists(), "projects/foo/src/main.rs missing");
+}
+
+#[test]
+fn project_new_has_no_workspace_section() {
+    let dir = TempDir::new().unwrap();
+    init_workspace(&dir);
+
+    cargo_polylith()
+        .args(["polylith", "project", "new", "foo"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(dir.path().join("projects/foo/Cargo.toml")).unwrap();
+    assert!(
+        !content.contains("[workspace]"),
+        "project Cargo.toml should not contain [workspace] section: {content}"
+    );
 }
 
 #[test]

@@ -87,11 +87,16 @@ pub fn create_base(root: &Path, name: &str) -> Result<()> {
 /// Create a new project under `<root>/projects/<name>/`.
 pub fn create_project(root: &Path, name: &str) -> Result<()> {
     let dir = root.join("projects").join(name);
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("creating {}", dir.display()))?;
+    let src = dir.join("src");
+    fs::create_dir_all(&src)
+        .with_context(|| format!("creating {}", src.display()))?;
 
     fs::write(dir.join("Cargo.toml"), project_cargo_toml(name))
         .context("writing project Cargo.toml")?;
+    fs::write(src.join("main.rs"), "fn main() {}\n")
+        .context("writing project src/main.rs")?;
+
+    add_workspace_member(root, &format!("projects/{name}"))?;
     Ok(())
 }
 
