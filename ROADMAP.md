@@ -14,11 +14,35 @@ Tools to expose:
 Invoked as `cargo polylith mcp serve` (stdin/stdout, standard MCP transport).
 `.mcp.json` points at the installed binary — no separate server to maintain.
 
-## Next — polish and publish
+## Next — TUI polish and model alignment
 
-- `cargo polylith check` hardening (more violation kinds, better messages)
-- `cargo polylith edit` TUI composer (ratatui)
-- Publish to crates.io once the MCP subcommand lands
+### TUI: transitive dependency hover
+When the cursor rests on a cell marked as transitive, show the dependency chain
+that explains *why* it is pulled in — e.g. `project → cli (base) → mcp → scaffold`.
+Surfaced as a status-bar message or inline popup using ratatui.
+
+### Profiles
+Support named configuration profiles so teams can define custom check rules,
+output formats, or workspace conventions in `.polylith/profiles.toml` (or similar).
+Profiles let different projects opt in to stricter or more lenient rule sets without
+forking the tool.
+
+### Model alignment review with Joakim Tengstrand (Clojure polylith)
+Walk through the Clojure polylith model side-by-side and document where the Rust
+implementation intentionally diverges (e.g. bases may depend on bases, path deps
+instead of `[patch]`) and where gaps exist that should be closed. Outcome: a clear
+"intentional differences" document and a backlog of model gaps to fix.
+
+### Docs pass with the documenter agent
+Run the `documenter` agent over README.md, ROADMAP.md, and any generated docs to
+ensure they reflect the current feature set (MCP server, TUI edit, check hardening).
+
+### `cargo polylith check` hardening
+More violation kinds, clearer messages, better guidance text.
+
+### Publish to crates.io
+After model alignment sign-off with Joakim and TUI is solid.
+Requires coordination before cutting the release.
 
 ## Future — LSP server (`cargo polylith lsp serve`)
 
