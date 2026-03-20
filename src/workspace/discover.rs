@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use cargo_toml::Manifest;
 
-use super::model::{Brick, BrickKind, Project, WorkspaceMap};
+use super::model::{Brick, BrickKind, ExternalDepInfo, Project, WorkspaceMap};
 
 /// Resolve the workspace root: use `override_root` if given, otherwise walk
 /// up from `start` searching for a `Cargo.toml` with `[workspace]`.
@@ -56,16 +56,48 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
     let components = scan_bricks(root, BrickKind::Component)?;
     let bases = scan_bricks(root, BrickKind::Base)?;
     let projects = scan_projects(root)?;
-    let (root_members, is_workspace) = {
+    let (root_members, is_workspace, root_workspace_deps) = {
         let toml_path = root.join("Cargo.toml");
         if toml_path.exists() {
             let manifest = Manifest::from_path(&toml_path)
                 .with_context(|| format!("failed to parse {}", toml_path.display()))?;
             let is_ws = manifest.workspace.is_some();
-            let members = manifest.workspace.map(|ws| ws.members).unwrap_or_default();
-            (members, is_ws)
+            let members = manifest
+                .workspace
+                .as_ref()
+                .map(|ws| ws.members.clone())
+                .unwrap_or_default();
+            let ws_deps = manifest
+                .workspace
+                .map(|ws| {
+                    ws.dependencies
+                        .into_iter()
+                        .filter_map(|(key, dep)| {
+                            // Skip path deps — they're internal, no drift possible
+                            if dep.detail().and_then(|d| d.path.as_deref()).is_some() {
+                                return None;
+                            }
+                            let version = dep
+                                .detail()
+                                .and_then(|d| d.version.as_deref())
+                                .or_else(|| {
+                                    let r = dep.req();
+                                    if r != "*" { Some(r) } else { None }
+                                })
+                                .map(|v| v.to_string());
+                            let mut features: Vec<String> = dep
+                                .detail()
+                                .map(|d| d.features.clone())
+                                .unwrap_or_default();
+                            features.sort();
+                            Some((key, ExternalDepInfo { features, version }))
+                        })
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+                .unwrap_or_default();
+            (members, is_ws, ws_deps)
         } else {
-            (vec![], false)
+            (vec![], false, std::collections::HashMap::new())
         }
     };
     Ok(WorkspaceMap {
@@ -75,6 +107,7 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
         projects,
         root_members,
         is_workspace,
+        root_workspace_deps,
     })
 }
 
@@ -232,6 +265,78 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
         };
         let mut dep_set: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut dep_paths: Vec<(String, PathBuf)> = vec![];
+        let mut external_deps: std::collections::HashMap<String, ExternalDepInfo> =
+            std::collections::HashMap::new();
+
+        // Helper: check whether a dep item has `workspace = true`.
+        let is_workspace_dep = |v: &toml_edit::Item| -> bool {
+            v.as_value()
+                .and_then(|v| v.as_inline_table())
+                .and_then(|it| it.get("workspace"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+                || v.as_table()
+                    .and_then(|t| t.get("workspace"))
+                    .and_then(|v| v.as_value())
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+        };
+
+        // Helper: extract version string from a dep item (bare string or `version = "..."` key).
+        let extract_version = |v: &toml_edit::Item| -> Option<String> {
+            // bare string: `serde = "1.0"`
+            if let Some(s) = v.as_value().and_then(|v| v.as_str()) {
+                if s != "*" {
+                    return Some(s.to_string());
+                }
+                return None;
+            }
+            // inline table: `serde = { version = "1.0", ... }`
+            let from_inline = v
+                .as_value()
+                .and_then(|v| v.as_inline_table())
+                .and_then(|it| it.get("version"))
+                .and_then(|v| v.as_str())
+                .filter(|s| *s != "*")
+                .map(|s| s.to_string());
+            if from_inline.is_some() {
+                return from_inline;
+            }
+            // regular table
+            v.as_table()
+                .and_then(|t| t.get("version"))
+                .and_then(|v| v.as_value())
+                .and_then(|v| v.as_str())
+                .filter(|s| *s != "*")
+                .map(|s| s.to_string())
+        };
+
+        // Helper: extract features list from a dep item.
+        let extract_features = |v: &toml_edit::Item| -> Vec<String> {
+            let arr = v
+                .as_value()
+                .and_then(|v| v.as_inline_table())
+                .and_then(|it| it.get("features"))
+                // InlineTable::get returns &toml_edit::Value, so call as_array() directly
+                .and_then(|v| v.as_array())
+                .or_else(|| {
+                    v.as_table()
+                        .and_then(|t| t.get("features"))
+                        .and_then(|v| v.as_value())
+                        .and_then(|v| v.as_array())
+                });
+            let mut feats: Vec<String> = arr
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|f| f.as_str())
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            feats.sort();
+            feats
+        };
+
         // [dependencies] — direct deps of the project binary
         if let Some(t) = doc.get("dependencies").and_then(|t| t.as_table()) {
             for (k, v) in t.iter() {
@@ -239,6 +344,12 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
                 if !has_package_alias(v) {
                     if let Some(rel) = extract_path(v) {
                         dep_paths.push((k.to_string(), path.join(&rel)));
+                    } else if !is_workspace_dep(v) {
+                        // External dep — capture features and version for drift checks.
+                        let mut features = extract_features(v);
+                        features.sort();
+                        let version = extract_version(v);
+                        external_deps.insert(k.to_string(), ExternalDepInfo { features, version });
                     }
                 }
             }
@@ -312,6 +423,7 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             patches,
             test_project,
             dep_paths,
+            external_deps,
         });
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));

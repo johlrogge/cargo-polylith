@@ -788,3 +788,174 @@ fn check_component_not_in_workspace_members_is_warning() {
         .success()  // warning → exit 0
         .stdout(predicate::str::contains("not-in-workspace"));
 }
+
+// ── standalone dep drift helpers ──────────────────────────────────────────────
+
+/// Create a minimal polylith workspace where the root `[workspace.dependencies]`
+/// declares `serde` with the given `ws_features` and `ws_version`, and there is
+/// one project that declares the same `serde` dep with `proj_features` /
+/// `proj_version`. Returns the TempDir handle.
+fn init_drift_workspace(
+    ws_features: &[&str],
+    ws_version: &str,
+    proj_features: &[&str],
+    proj_version: &str,
+) -> TempDir {
+    let tmp = TempDir::new().unwrap();
+
+    // Root Cargo.toml with [workspace.dependencies]
+    let feat_list = |feats: &[&str]| -> String {
+        let items: Vec<String> = feats.iter().map(|f| format!("\"{}\"", f)).collect();
+        format!("[{}]", items.join(", "))
+    };
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        format!(
+            "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n\
+             [workspace.dependencies]\nserde = {{ version = \"{ws_version}\", features = {feats} }}\n",
+            ws_version = ws_version,
+            feats = feat_list(ws_features),
+        ),
+    ).unwrap();
+
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
+
+    // Project Cargo.toml with its own [dependencies] for serde
+    let proj = tmp.path().join("projects/myapp");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        format!(
+            "[workspace]\nmembers = []\nresolver = \"2\"\n\
+             [package]\nname = \"myapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+             [[bin]]\nname = \"myapp\"\npath = \"src/main.rs\"\n\
+             [dependencies]\nserde = {{ version = \"{proj_version}\", features = {feats} }}\n",
+            proj_version = proj_version,
+            feats = feat_list(proj_features),
+        ),
+    ).unwrap();
+
+    tmp
+}
+
+// ── Check B: feature drift ────────────────────────────────────────────────────
+
+#[test]
+fn check_project_feature_drift_is_warning() {
+    let tmp = init_drift_workspace(&["derive", "alloc"], "1.0", &["derive"], "1.0");
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()  // warning → exit 0
+        .stdout(predicate::str::contains("project-feature-drift"));
+}
+
+#[test]
+fn check_project_feature_drift_superset_no_violation() {
+    // Project has MORE features than workspace — not a violation
+    let tmp = init_drift_workspace(&["derive"], "1.0", &["derive", "alloc"], "1.0");
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("project-feature-drift").not());
+}
+
+#[test]
+fn check_project_feature_match_no_violation() {
+    // Identical features → no drift
+    let tmp = init_drift_workspace(&["derive", "alloc"], "1.0", &["alloc", "derive"], "1.0");
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("project-feature-drift").not());
+}
+
+// ── Check C: version drift ────────────────────────────────────────────────────
+
+#[test]
+fn check_project_version_drift_is_warning() {
+    let tmp = init_drift_workspace(&["derive"], "1.0", &["derive"], "2.0");
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()  // warning → exit 0
+        .stdout(predicate::str::contains("project-version-drift"));
+}
+
+#[test]
+fn check_project_version_match_no_violation() {
+    let tmp = init_drift_workspace(&["derive"], "1.0", &["derive"], "1.0");
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("project-version-drift").not());
+}
+
+// ── edge cases ────────────────────────────────────────────────────────────────
+
+#[test]
+fn check_project_dep_only_in_project_no_violation() {
+    // Dep exists in project but NOT in root workspace.dependencies → no violation
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+    ).unwrap();
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
+    let proj = tmp.path().join("projects/myapp");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n\
+         [package]\nname = \"myapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"myapp\"\npath = \"src/main.rs\"\n\
+         [dependencies]\nserde = { version = \"1.0\", features = [\"derive\"] }\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("project-feature-drift").not())
+        .stdout(predicate::str::contains("project-version-drift").not());
+}
+
+#[test]
+fn check_workspace_true_dep_no_violation() {
+    // `{ workspace = true }` dep is inherited from root → not checked for drift
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n\
+         [workspace.dependencies]\nserde = { version = \"1.0\", features = [\"derive\", \"alloc\"] }\n",
+    ).unwrap();
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
+    let proj = tmp.path().join("projects/myapp");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n\
+         [package]\nname = \"myapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [[bin]]\nname = \"myapp\"\npath = \"src/main.rs\"\n\
+         [dependencies]\nserde = { workspace = true }\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("project-feature-drift").not())
+        .stdout(predicate::str::contains("project-version-drift").not());
+}

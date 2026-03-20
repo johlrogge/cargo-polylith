@@ -46,6 +46,22 @@ pub enum ViolationKind {
         expected_name: String,
         path: String,
     },
+    /// A project's external dep declares fewer features than the root workspace dep —
+    /// standalone builds may be missing features that the root workspace unifies.
+    ProjectFeatureDrift {
+        project: String,
+        dep: String,
+        project_features: Vec<String>,
+        workspace_features: Vec<String>,
+    },
+    /// A project's external dep specifies a different version than the root workspace dep —
+    /// standalone builds may resolve a different crate version.
+    ProjectVersionDrift {
+        project: String,
+        dep: String,
+        project_version: String,
+        workspace_version: String,
+    },
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -328,7 +344,69 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
 
     }
 
+    // --- project standalone dep drift checks (B & C) ---
+    for project in &map.projects {
+        for (dep, proj_info) in &project.external_deps {
+            let Some(ws_info) = map.root_workspace_deps.get(dep) else { continue };
+
+            // Check B: feature drift — project features are a strict subset of workspace features
+            let proj_set: std::collections::HashSet<_> = proj_info.features.iter().collect();
+            let ws_set: std::collections::HashSet<_> = ws_info.features.iter().collect();
+            if proj_set.is_subset(&ws_set) && proj_set != ws_set {
+                violations.push(Violation {
+                    kind: ViolationKind::ProjectFeatureDrift {
+                        project: project.name.clone(),
+                        dep: dep.clone(),
+                        project_features: proj_info.features.clone(),
+                        workspace_features: ws_info.features.clone(),
+                    },
+                    message: format!(
+                        "project '{}': dep '{}' features {:?} are a subset of workspace features {:?} \
+                         — standalone build may be missing features",
+                        project.name, dep, proj_info.features, ws_info.features,
+                    ),
+                });
+            }
+
+            // Check C: version drift
+            if let (Some(pv), Some(wv)) = (&proj_info.version, &ws_info.version) {
+                if pv != wv {
+                    violations.push(Violation {
+                        kind: ViolationKind::ProjectVersionDrift {
+                            project: project.name.clone(),
+                            dep: dep.clone(),
+                            project_version: pv.clone(),
+                            workspace_version: wv.clone(),
+                        },
+                        message: format!(
+                            "project '{}': dep '{}' version '{}' differs from workspace version '{}' \
+                             — standalone build may resolve a different version",
+                            project.name, dep, pv, wv,
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     violations
+}
+
+/// Returns `true` for violation kinds that are warnings (exit 0), `false` for hard errors.
+pub fn is_warning_kind(k: &ViolationKind) -> bool {
+    matches!(
+        k,
+        ViolationKind::OrphanComponent
+            | ViolationKind::WildcardReExport
+            | ViolationKind::BaseHasMainRs
+            | ViolationKind::ProjectMissingBase
+            | ViolationKind::NotInRootWorkspace
+            | ViolationKind::AmbiguousInterface
+            | ViolationKind::DuplicateName
+            | ViolationKind::MissingInterface
+            | ViolationKind::ProjectFeatureDrift { .. }
+            | ViolationKind::ProjectVersionDrift { .. }
+    )
 }
 
 /// Returns true if `pattern` (a root workspace members entry) covers `rel_path`
