@@ -71,6 +71,22 @@ Run the `documenter` agent over README.md, ROADMAP.md, and any generated docs to
 ensure they reflect the current feature set (MCP server, TUI edit, check hardening).
 
 ### `cargo polylith check` hardening
+
+#### Dep key / package name mismatch (bug fix, do first)
+In `resolver = "2"` standalone project workspaces, a path dependency key must exactly
+match the target's `package.name` — hyphens and underscores are NOT interchangeable.
+A mismatch silently builds from the root workspace but fails in standalone project builds
+with a confusing "no matching package found" error.
+
+The tool already reads all the data needed. Requires retaining the raw dep key alongside
+the resolved path during `scan_projects`, then adding a check loop in `run_checks`:
+for each project path dep, resolve the path, read `package.name`, compare to the key
+(accounting for legitimate `package = "..."` aliases). Report as a hard violation.
+
+Survives the model correction — the check logic is unchanged whether projects are
+sub-workspaces or bin crates.
+
+#### Other hardening
 More violation kinds, clearer messages, better guidance text.
 
 ### Publish to crates.io
