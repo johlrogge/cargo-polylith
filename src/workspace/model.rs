@@ -31,6 +31,10 @@ pub struct Project {
     pub patches: Vec<(String, PathBuf)>,
     /// True when `[package.metadata.polylith] test-project = true` — suppresses `no-base` warning.
     pub test_project: bool,
+    /// Raw path dependencies: (dep_key, resolved_absolute_path). Used to validate
+    /// that dep keys match the target package name. Only populated for deps that
+    /// have a `path = "..."` value and no `package = "..."` alias.
+    pub dep_paths: Vec<(String, PathBuf)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
