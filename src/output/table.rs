@@ -150,6 +150,8 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::MissingLibRs         => "missing-lib".red().to_string(),
             ViolationKind::MissingImplFile      => "missing-impl".red().to_string(),
             ViolationKind::DepKeyMismatch { .. } => "dep-key-mismatch".red().to_string(),
+            ViolationKind::ProjectFeatureDrift { .. } => "project-feature-drift".yellow().to_string(),
+            ViolationKind::ProjectVersionDrift { .. } => "project-version-drift".yellow().to_string(),
         };
         println!("  [{tag}] {}", v.message);
     }
