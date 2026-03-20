@@ -108,3 +108,32 @@ Adds file-watching to keep the `WorkspaceMap` live as files change.
 `tower-lsp` or `lsp-server` crate for the protocol layer.
 
 Helix is the primary target (no existing Cargo.toml LSP support).
+
+### `polylith_affected_projects` — affected project detection with semver suggestions
+
+Given a git range (`since`..`until`), determines which projects need a version bump
+and what bump level (patch/minor/major) is warranted based on conventional commits.
+
+**MCP tool parameters:**
+- `path` (required) — workspace root (must be a git repo)
+- `since` (required) — git ref to compare from (tag, commit, branch)
+- `until` (optional, default `HEAD`)
+
+**Algorithm:**
+1. `git diff --name-only <since>..<until>` → changed files
+2. Map files to components by path prefix (`components/foo_bar/` → `foo-bar`)
+3. For each project: resolve full transitive component dep graph
+4. A project is affected if any transitive dep changed, OR its own `src/` changed
+5. Determine semver bump level from conventional commit messages in range:
+   - `fix:` → patch; `feat:` → minor; `feat!:` / `BREAKING CHANGE:` → major
+   - Mixed: take the highest level across all commits touching affected components
+
+**Output:** table of affected projects with current → suggested version and reason.
+
+**`--apply` mode:** Write suggested versions to each affected project's `Cargo.toml`
+and update matching `void-packages/srcpkgs/*/template` `version=` fields to stay in
+sync with xbps-based deployment pipelines.
+
+**Why high value:** Polylith already owns the dep graph — adding git-range + conventional
+commits makes it a complete release oracle. `--apply` makes version bumping a one-command
+operation across N projects.
