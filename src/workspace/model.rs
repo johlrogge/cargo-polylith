@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -22,6 +23,15 @@ pub struct Brick {
     pub interface: Option<String>,
 }
 
+/// Feature and version info for a single external (non-path) dependency.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExternalDepInfo {
+    /// Sorted list of enabled features.
+    pub features: Vec<String>,
+    /// Version string, if present (None for `{ workspace = true }` or version-less entries).
+    pub version: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Project {
     pub name: String,
@@ -35,6 +45,9 @@ pub struct Project {
     /// that dep keys match the target package name. Only populated for deps that
     /// have a `path = "..."` value and no `package = "..."` alias.
     pub dep_paths: Vec<(String, PathBuf)>,
+    /// External (non-path, non-workspace) deps with their features and version.
+    /// Keyed by the resolved package name (or dep key when no `package =` alias).
+    pub external_deps: HashMap<String, ExternalDepInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,4 +62,7 @@ pub struct WorkspaceMap {
     /// False when the root Cargo.toml lacks a `[workspace]` section.
     /// Commands should warn the user in this case.
     pub is_workspace: bool,
+    /// External (non-path) deps declared in root `[workspace.dependencies]`.
+    /// Keyed by dep key (which equals the package name when no `package =` alias).
+    pub root_workspace_deps: HashMap<String, ExternalDepInfo>,
 }
