@@ -5,9 +5,9 @@ pub mod discover;
 pub mod model;
 pub mod status;
 
-pub use check::{run_checks, Violation, ViolationKind};
-pub use discover::{build_workspace_map, find_workspace_root, resolve_root};
-pub use model::{Brick, BrickKind, ExternalDepInfo, Project, WorkspaceMap};
+pub use check::{check_profile, run_checks, Violation, ViolationKind};
+pub use discover::{build_workspace_map, discover_profiles, find_workspace_root, resolve_profile_workspace, resolve_root};
+pub use model::{Brick, BrickKind, ExternalDepInfo, Profile, Project, ResolvedProfileWorkspace, WorkspaceMap, WorkspacePathDep};
 pub use status::{run_status, Divergence, StatusReport};
 
 /// Classification of a dependency key found in a brick's `[dependencies]`.

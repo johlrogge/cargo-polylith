@@ -66,6 +66,24 @@ pub enum ViolationKind {
     ProjectNotInRootWorkspace {
         project: String,
     },
+    /// A profile's implementation path does not exist under the workspace root.
+    ProfileImplPathNotFound {
+        profile: String,
+        interface: String,
+        path: String,
+    },
+    /// A profile's implementation path exists but is not a known workspace component.
+    ProfileImplNotAComponent {
+        profile: String,
+        interface: String,
+        path: String,
+    },
+    /// A component or base has a direct `path = "..."` dep to another workspace member
+    /// instead of using `{ workspace = true }` — bypasses the profile wiring diagram.
+    HardwiredDep {
+        brick: String,
+        dep: String,
+    },
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -401,6 +419,41 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
         }
     }
 
+    // --- hardwired path dep checks ---
+    // Check for components/bases that directly path-dep on other workspace members
+    // instead of using { workspace = true }
+    let all_brick_names: std::collections::HashSet<&str> = map
+        .components
+        .iter()
+        .chain(map.bases.iter())
+        .map(|b| b.name.as_str())
+        .collect();
+    let all_interface_names: std::collections::HashSet<&str> = map
+        .components
+        .iter()
+        .filter_map(|c| c.interface.as_deref())
+        .collect();
+
+    for brick in map.components.iter().chain(map.bases.iter()) {
+        for dep_key in &brick.path_dep_keys {
+            // Is this dep_key a known component name or interface name?
+            if all_brick_names.contains(dep_key.as_str())
+                || all_interface_names.contains(dep_key.as_str())
+            {
+                violations.push(Violation {
+                    kind: ViolationKind::HardwiredDep {
+                        brick: brick.name.clone(),
+                        dep: dep_key.clone(),
+                    },
+                    message: format!(
+                        "'{}' has a direct path dep on '{}' — consider using `{{ workspace = true }}` and the profile wiring diagram",
+                        brick.name, dep_key
+                    ),
+                });
+            }
+        }
+    }
+
     violations
 }
 
@@ -422,7 +475,52 @@ pub fn is_warning_kind(k: &ViolationKind) -> bool {
         ViolationKind::MissingImplFile => false,
         ViolationKind::BaseMissingLibRs => false,
         ViolationKind::DepKeyMismatch { .. } => false,
+        ViolationKind::ProfileImplPathNotFound { .. } => false,
+        ViolationKind::ProfileImplNotAComponent { .. } => false,
+        ViolationKind::HardwiredDep { .. } => true,
     }
+}
+
+/// Validate a profile against the workspace map.
+/// Returns violations for any implementation path that doesn't exist or isn't a known component.
+pub fn check_profile(profile: &super::model::Profile, map: &WorkspaceMap) -> Vec<Violation> {
+    let mut violations = vec![];
+    for (interface, impl_path) in &profile.implementations {
+        let abs = map.root.join(impl_path);
+        if !abs.exists() {
+            violations.push(Violation {
+                kind: ViolationKind::ProfileImplPathNotFound {
+                    profile: profile.name.clone(),
+                    interface: interface.clone(),
+                    path: impl_path.clone(),
+                },
+                message: format!(
+                    "profile '{}': implementation path '{}' for interface '{}' does not exist",
+                    profile.name, impl_path, interface
+                ),
+            });
+            continue;
+        }
+        // Must resolve to a known component (by path), canonicalizing both sides to handle symlinks.
+        let abs_canon = abs.canonicalize().unwrap_or(abs.clone());
+        let known = map.components.iter().any(|c| {
+            c.path.canonicalize().unwrap_or(c.path.clone()) == abs_canon
+        });
+        if !known {
+            violations.push(Violation {
+                kind: ViolationKind::ProfileImplNotAComponent {
+                    profile: profile.name.clone(),
+                    interface: interface.clone(),
+                    path: impl_path.clone(),
+                },
+                message: format!(
+                    "profile '{}': '{}' for interface '{}' is not a known workspace component",
+                    profile.name, impl_path, interface
+                ),
+            });
+        }
+    }
+    violations
 }
 
 /// Returns true if `pattern` (a root workspace members entry) covers `rel_path`

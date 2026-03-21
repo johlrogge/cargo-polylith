@@ -66,6 +66,10 @@ path = "tests/integration/check_test.rs"
 name = "status_test"
 path = "tests/integration/status_test.rs"
 
+[[test]]
+name = "profile_test"
+path = "tests/integration/profile_test.rs"
+
 [dev-dependencies]
 tempfile = "3.10"
 assert_cmd = "2.0"

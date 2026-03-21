@@ -64,6 +64,9 @@ pub enum PolylithCommand {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Also validate this profile (name without .profile extension)
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
     },
     /// Show a lenient audit of workspace structure (always exits 0)
     Status {
@@ -83,6 +86,11 @@ pub enum PolylithCommand {
         #[command(subcommand)]
         action: McpAction,
     },
+    /// Manage polylith profiles (named sets of implementation selections)
+    Profile {
+        #[command(subcommand)]
+        action: ProfileAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -98,6 +106,35 @@ pub enum McpAction {
         /// Enable write tools (scaffold components/bases/projects, patch implementations)
         #[arg(long)]
         write: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ProfileAction {
+    /// List all profiles and their implementation selections
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Generate a profile workspace Cargo.toml and build it
+    Build {
+        /// Profile name (without .profile extension)
+        name: String,
+        /// Generate the workspace Cargo.toml but do not invoke cargo build
+        #[arg(long)]
+        no_build: bool,
+    },
+    /// Add or update an implementation selection in a profile
+    Add {
+        /// Interface name (the dep key in [workspace.dependencies])
+        interface: String,
+        /// Path to the implementation component (relative to workspace root)
+        #[arg(long, value_name = "PATH")]
+        r#impl: String,
+        /// Profile name to update (without .profile extension)
+        #[arg(long, value_name = "NAME")]
+        profile: String,
     },
 }
 

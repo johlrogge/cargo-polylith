@@ -3,7 +3,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::workspace::check::{Violation, ViolationKind};
-use crate::workspace::model::WorkspaceMap;
+use crate::workspace::model::{Profile, WorkspaceMap};
 use crate::workspace::status::StatusReport;
 use crate::workspace::{classify_dep, DepKind};
 
@@ -153,9 +153,63 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::ProjectFeatureDrift { .. } => "project-feature-drift".yellow().to_string(),
             ViolationKind::ProjectVersionDrift { .. } => "project-version-drift".yellow().to_string(),
             ViolationKind::ProjectNotInRootWorkspace { .. } => "project-not-in-workspace".yellow().to_string(),
+            ViolationKind::ProfileImplPathNotFound { .. } => "profile-impl-not-found".red().to_string(),
+            ViolationKind::ProfileImplNotAComponent { .. } => "profile-impl-not-component".red().to_string(),
+            ViolationKind::HardwiredDep { .. } => "hardwired-dep".yellow().to_string(),
         };
         println!("  [{tag}] {}", v.message);
     }
+}
+
+pub fn print_profiles(profiles: &[Profile]) {
+    if profiles.is_empty() {
+        println!("No profiles found. Create profiles/<name>.profile to define a profile.");
+        return;
+    }
+    println!("{}", "Profiles".bold());
+    for profile in profiles {
+        println!("  {}", profile.name.cyan().bold());
+        if profile.implementations.is_empty() && profile.libraries.is_empty() {
+            println!("    (empty)");
+        }
+        if !profile.implementations.is_empty() {
+            println!("    {}", "Implementations:".dimmed());
+            let mut entries: Vec<_> = profile.implementations.iter().collect();
+            entries.sort_by_key(|(k, _)| k.as_str());
+            for (iface, path) in entries {
+                println!("      {} \u{2192} {}", iface.green(), path);
+            }
+        }
+        if !profile.libraries.is_empty() {
+            println!("    {}", "Libraries:".dimmed());
+            let mut entries: Vec<_> = profile.libraries.iter().collect();
+            entries.sort_by_key(|(k, _)| k.as_str());
+            for (key, info) in entries {
+                match (&info.version, info.features.is_empty()) {
+                    (Some(v), true) => println!("      {} = \"{}\"", key, v),
+                    (Some(v), false) => println!("      {} = {{ version = \"{}\", features = {:?} }}", key, v, info.features),
+                    (None, false) => println!("      {} = {{ features = {:?} }}", key, info.features),
+                    (None, true) => {} // nothing to show
+                }
+            }
+        }
+    }
+}
+
+pub fn print_profiles_json(profiles: &[Profile]) {
+    let out: Vec<_> = profiles
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "implementations": p.implementations,
+                "libraries": p.libraries.iter().map(|(k, v)| {
+                    (k.clone(), serde_json::json!({ "version": v.version, "features": v.features }))
+                }).collect::<std::collections::HashMap<_, _>>()
+            })
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "profiles": out })).unwrap());
 }
 
 pub fn print_status(report: &StatusReport) {

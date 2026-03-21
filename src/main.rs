@@ -44,7 +44,9 @@ fn main() {
             commands::deps::run(component.as_deref(), json, workspace_root)
         }
         PolylithCommand::Info { json } => commands::info::run(json, workspace_root),
-        PolylithCommand::Check { json } => commands::check::run(json, workspace_root),
+        PolylithCommand::Check { json, profile } => {
+            commands::check::run(json, profile.as_deref(), workspace_root)
+        }
         PolylithCommand::Status { json } => commands::status::run(json, workspace_root),
         PolylithCommand::Edit => commands::edit::run(workspace_root),
         PolylithCommand::Generate { action } => {
@@ -57,6 +59,18 @@ fn main() {
             use cli::McpAction;
             match action {
                 McpAction::Serve { write } => commands::mcp::serve(workspace_root, write),
+            }
+        }
+        PolylithCommand::Profile { action } => {
+            use cli::ProfileAction;
+            match action {
+                ProfileAction::List { json } => commands::profile::list(json, workspace_root),
+                ProfileAction::Build { name, no_build } => {
+                    commands::profile::build(&name, no_build, workspace_root)
+                }
+                ProfileAction::Add { interface, r#impl, profile } => {
+                    commands::profile::add(&interface, &r#impl, &profile, workspace_root)
+                }
             }
         }
     };
