@@ -1,21 +1,37 @@
 use std::env;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::output::table;
-use crate::workspace::{build_workspace_map, check::is_warning_kind, resolve_root, run_checks};
+use crate::workspace::{
+    build_workspace_map, check::is_warning_kind, check_profile, discover_profiles, resolve_root,
+    run_checks,
+};
 
-pub fn run(json: bool, workspace_root: Option<&Path>) -> Result<()> {
+pub fn run(json: bool, profile_name: Option<&str>, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
     let map = build_workspace_map(&root)?;
 
     if !map.is_workspace {
-        eprintln!("warning: {} does not appear to be a polylith workspace (no [workspace] in Cargo.toml)", root.display());
+        eprintln!(
+            "warning: {} does not appear to be a polylith workspace (no [workspace] in Cargo.toml)",
+            root.display()
+        );
     }
 
-    let violations = run_checks(&map);
+    let mut violations = run_checks(&map);
+
+    // If a profile name was given, also validate that profile.
+    if let Some(name) = profile_name {
+        let profiles = discover_profiles(&root)?;
+        let profile = profiles
+            .into_iter()
+            .find(|p| p.name == name)
+            .with_context(|| format!("profile '{}' not found in profiles/", name))?;
+        violations.extend(check_profile(&profile, &map));
+    }
 
     if json {
         table::print_check_json(&violations);
@@ -24,7 +40,6 @@ pub fn run(json: bool, workspace_root: Option<&Path>) -> Result<()> {
     }
 
     if violations.iter().any(|v| !is_warning_kind(&v.kind)) {
-        // Warnings are exit 0; everything else is an error exit.
         std::process::exit(1);
     }
 

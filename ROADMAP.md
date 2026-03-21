@@ -1,8 +1,22 @@
 # Roadmap
 
-## Now — TUI polish and model alignment
+## Shipped
 
-MCP server (`cargo polylith mcp serve`) is shipped ✅ — read-only and write tools,
+### 0.6.0 — Polylith profiles ✅
+
+Named implementation sets that mirror the Clojure polylith profiles concept.
+
+- `cargo polylith profile list [--json]` — lists all profiles and their selections
+- `cargo polylith profile build <name> [--no-build]` — generates `profiles/<name>/Cargo.toml` (a standalone workspace applying the profile's overrides) and optionally runs `cargo build`
+- `cargo polylith profile add <interface> --impl <path> --profile <name>` — adds or updates an implementation selection in a `.profile` file
+- `cargo polylith check --profile <name>` — validates a named profile's implementation paths
+- New check warnings: `hardwired-dep`, `profile-impl-not-found`, `profile-impl-not-component`
+
+Profile files (`profiles/<name>.profile`) declare implementation overrides and extra library dependencies. `[workspace.dependencies]` in the root `Cargo.toml` is the wiring diagram; profiles override specific entries for different build targets.
+
+### Earlier
+
+MCP server (`cargo polylith mcp serve`) ✅ — read-only and write tools,
 stdin/stdout JSON-RPC transport, wires directly into Claude Code and other MCP clients.
 
 ## Next — model alignment
@@ -50,16 +64,16 @@ When the cursor rests on a cell marked as transitive, show the dependency chain
 that explains *why* it is pulled in — e.g. `scaffold via: myproject → cli (base) → mcp → scaffold`.
 Shown in the status bar.
 
-### Profiles (configuration)
-Support named configuration profiles so teams can define custom check rules,
-output formats, or workspace conventions in `.polylith/profiles.toml` (or similar).
-Profiles let different projects opt in to stricter or more lenient rule sets without
-forking the tool.
-> Note: depends on model correction above to avoid naming confusion with workspace profiles.
+### Check rule configuration
+Support named rule sets so teams can define custom check rules, output formats,
+or workspace conventions in `.polylith/config.toml` (or similar). Lets different
+projects opt in to stricter or more lenient rule sets without forking the tool.
+> Note: implementation-selection profiles (`cargo polylith profile`) shipped in 0.6.0.
+> This item covers a separate concept: configurable check rules.
 
-### Docs pass with the documenter agent
-Run the `documenter` agent over README.md, ROADMAP.md, and any generated docs to
-ensure they reflect the current feature set (MCP server, TUI edit, check hardening).
+### Docs pass with the documenter agent ✅
+README.md and ROADMAP.md updated to reflect the current feature set (MCP server,
+TUI edit, check hardening, polylith profiles).
 
 ### `cargo polylith check` hardening
 

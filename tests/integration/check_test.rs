@@ -17,15 +17,16 @@ fn fixture_root() -> PathBuf {
 
 #[test]
 fn check_clean_fixture_passes() {
+    // The fixture's cli base has direct path deps on logger and parser, which now
+    // produce hardwired-dep warnings (exit 0). The check should still succeed.
     cargo_polylith()
         .args(["polylith", "--workspace-root", fixture_root().to_str().unwrap(), "check"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("No violations"));
+        .success();
 }
 
 #[test]
-fn check_json_clean_fixture_has_empty_violations() {
+fn check_json_fixture_has_only_warning_violations() {
     let out = cargo_polylith()
         .args(["polylith", "--workspace-root", fixture_root().to_str().unwrap(), "check", "--json"])
         .assert()
@@ -36,7 +37,14 @@ fn check_json_clean_fixture_has_empty_violations() {
 
     let text = std::str::from_utf8(&out).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(text).expect("not valid JSON");
-    assert_eq!(parsed["violations"].as_array().unwrap().len(), 0);
+    let violations = parsed["violations"].as_array().unwrap();
+    // All violations from the fixture are warnings (hardwired-dep); no hard errors.
+    // The cli base has path deps on logger and parser; parser has a path dep on logger.
+    // Struct variants serialize as objects, so we check the "hardwired_dep" key.
+    assert!(
+        violations.iter().all(|v| v["kind"].get("hardwired_dep").is_some()),
+        "expected only hardwired_dep warnings, got: {violations:?}"
+    );
 }
 
 // ── missing lib.rs ────────────────────────────────────────────────────────────
@@ -286,12 +294,15 @@ fn check_transitive_component_is_not_orphan() {
          [dependencies]\nmid-comp = { path = \"../../components/mid-comp\" }\n",
     ).unwrap();
 
-    // leaf-comp is reachable transitively — no orphan violation expected
+    // leaf-comp is reachable transitively — no orphan violation expected.
+    // However, mid-comp and mybase have direct path deps on workspace components,
+    // which now produce hardwired-dep warnings (exit 0). Assert success (no hard errors)
+    // and that no orphan violation is reported.
     cargo_polylith()
         .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("No violations"));
+        .stdout(predicate::str::contains("orphan").not());
 }
 
 // ── project missing base is a warning ────────────────────────────────────────

@@ -21,6 +21,9 @@ pub struct Brick {
     pub manifest_path: PathBuf,
     /// Value of `[package.metadata.polylith] interface = "..."`, if present.
     pub interface: Option<String>,
+    /// Dep keys that use a direct `path = "..."` dep (not `{ workspace = true }`).
+    /// Used to detect bricks that bypass the workspace wiring diagram.
+    pub path_dep_keys: Vec<String>,
 }
 
 /// Feature and version info for a single external (non-path) dependency.
@@ -30,6 +33,15 @@ pub struct ExternalDepInfo {
     pub features: Vec<String>,
     /// Version string, if present (None for `{ workspace = true }` or version-less entries).
     pub version: Option<String>,
+}
+
+/// A path dependency declared in `[workspace.dependencies]` — the interface wiring diagram.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspacePathDep {
+    /// Path value as written in the Cargo.toml (relative to workspace root).
+    pub path: String,
+    /// `package = "..."` alias, if present.
+    pub package: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +60,20 @@ pub struct Project {
     pub external_deps: HashMap<String, ExternalDepInfo>,
 }
 
+/// A polylith profile: a named set of implementation selections applied workspace-wide.
+/// Profile files live at `profiles/<name>.profile` in the workspace root.
+#[derive(Debug, Clone, Serialize)]
+pub struct Profile {
+    /// Profile name derived from the filename (without `.profile` extension).
+    pub name: String,
+    /// Absolute path to the `.profile` file.
+    pub path: PathBuf,
+    /// Maps interface dep key → component path (relative to workspace root).
+    pub implementations: HashMap<String, String>,
+    /// Maps dep key → feature/version overrides for library deps.
+    pub libraries: HashMap<String, ExternalDepInfo>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceMap {
     pub root: PathBuf,
@@ -63,4 +89,22 @@ pub struct WorkspaceMap {
     /// External (non-path) deps declared in root `[workspace.dependencies]`.
     /// Keyed by dep key (which equals the package name when no `package =` alias).
     pub root_workspace_deps: HashMap<String, ExternalDepInfo>,
+    /// Path deps declared in root `[workspace.dependencies]` — the interface wiring diagram.
+    /// Maps dep key (interface name) → path + optional package alias.
+    pub root_workspace_interface_deps: HashMap<String, WorkspacePathDep>,
+}
+
+/// The fully resolved data needed to generate a profile workspace Cargo.toml.
+/// Computed by `workspace::resolve_profile_workspace`; consumed by `scaffold::write_profile_workspace`.
+#[derive(Debug, Clone)]
+pub struct ResolvedProfileWorkspace {
+    /// Profile name (used for the output path and header comment).
+    pub profile_name: String,
+    /// Workspace members as paths relative to the profile directory.
+    pub members: Vec<String>,
+    /// Interface (path) dep lines, fully rendered for [workspace.dependencies].
+    /// Each entry is a TOML line like: `foo = { path = "../../components/foo" }`
+    pub interface_dep_lines: Vec<String>,
+    /// Library dep lines, fully rendered for [workspace.dependencies].
+    pub library_dep_lines: Vec<String>,
 }

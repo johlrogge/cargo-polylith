@@ -6,7 +6,7 @@
 model to Rust/Cargo workspaces. Binary name: `cargo-polylith`. Invoked as
 `cargo polylith <command>`.
 
-See `PLAN.md` for the full design and implementation roadmap.
+See `PLAN.md` for the current implementation plan and `ROADMAP.md` for the long-term vision.
 
 ## Build and Test
 
@@ -67,6 +67,15 @@ The tool must work even when the user's workspace doesn't fully compile.
 
 - `~/projects/modular-digital-music-array` — real-world target (27 components, 11 bases) for `deps` and `info`
 - `tests/fixtures/` — minimal hand-crafted polylith workspace for unit/integration tests
+
+## Agents
+
+- **architect** — reviews code and architecture; read-only, advises only. Use `/architect` skill.
+- **code-minion** — implements changes; do not write Rust code in the main conversation, delegate here.
+- **commit** — stages and commits; use `/commit` skill.
+- **plan** — designs implementation approach before coding begins.
+
+Workflow: plan → code-minion implements → architect reviews.
 
 ## Git Commit Style
 

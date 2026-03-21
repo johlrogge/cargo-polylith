@@ -72,7 +72,7 @@ pre-check on public symbol names.
 | Concept | Clojure polylith | cargo-polylith | Why |
 |---|---|---|---|
 | **Interface declaration** | Namespace structure — components implement an interface by having the same namespace | `[package.metadata.polylith] interface = "..."` in Cargo.toml | Rust has no namespace-based interface; explicit metadata is unambiguous and prevents typos from creating phantom interfaces |
-| **Profile / implementation switching** | Named profiles in `deps.edn` select which source directories are compiled in | Path dependency aliased to the interface name in a project's `[dependencies]`; `package = "..."` when the crate name differs | Cargo path deps are the natural mechanism — no indirection through a registry needed |
+| **Profile / implementation switching** | Named profiles in `deps.edn` select which source directories are compiled in | Named profiles stored in `profiles/<name>.profile`; `profile build` generates a standalone workspace Cargo.toml applying the profile's implementation overrides | Mirrors Clojure polylith's profile concept — `[workspace.dependencies]` is the wiring diagram, profiles override specific entries for different build targets |
 | **Development project** | A dedicated `development/` project at the workspace root | The root workspace itself | Cargo's workspace model is already the right structure; no separate project needed |
 | **Stub-first development** | Default profile uses the primary implementation | Root workspace uses lightweight/stub components by default; projects select production-grade implementations via path deps | Enables fast tests without heavy deps (PipeWire, file scanning, sha2, etc.) |
 | **Test/dev projects** | The development project has no base requirement | Projects in `projects/` that are test or development harnesses do not require a base dependency | A test runner is an entry point in its own right; forcing a base dependency would be artificial |
@@ -129,6 +129,11 @@ cargo polylith deps
 
 # 7. Validate structure
 cargo polylith check
+
+# 8. Work with profiles (optional — for named implementation sets)
+cargo polylith profile add http-client --impl components/http-client-real --profile production
+cargo polylith profile list
+cargo polylith profile build production
 ```
 
 ---
@@ -315,9 +320,71 @@ cargo polylith check
 | `ambiguous-interface` | Two or more components declare the same interface name but none has the default package name — every consumer must explicitly declare which implementation to use |
 | `duplicate-name` | Two or more components share the same package name — rename the stub and declare `interface` metadata on both |
 | `missing-interface` | Every component must declare `[package.metadata.polylith] interface = "..."` — use `component update <name>` or `cargo polylith edit` (press 'i') to set it |
+| `hardwired-dep` | Component or base has a direct path dependency to another workspace component instead of `{ workspace = true }` — bypasses the wiring diagram |
+| `profile-impl-not-found` | A profile references a component path that does not exist in the workspace |
+| `profile-impl-not-component` | A profile references a path that is not a known workspace component |
 
 Flags:
 - `--json` — machine-readable output (`{"violations": [...]}`)
+- `--profile <name>` — validate a named profile's implementation paths in addition to workspace structure
+
+---
+
+### `cargo polylith profile`
+
+Manages named sets of implementation selections that can be applied workspace-wide.
+Profiles mirror the Clojure polylith concept: `[workspace.dependencies]` in the root
+`Cargo.toml` is the "wiring diagram"; profiles override specific entries to select
+different implementations for different build targets (production vs dev stubs, etc.).
+
+Profile files live at `profiles/<name>.profile` and use the following format:
+
+```toml
+[implementations]
+http-client  = "components/http-client-hato"
+email-sender = "components/email-sender-smtp"
+
+[libraries]
+tokio = { version = "1", features = ["rt-multi-thread"] }
+```
+
+#### `cargo polylith profile list`
+
+Lists all profiles and their implementation selections.
+
+```
+cargo polylith profile list
+cargo polylith profile list --json
+```
+
+Flags:
+- `--json` — machine-readable output
+
+#### `cargo polylith profile build <name>`
+
+Generates `profiles/<name>/Cargo.toml` — a standalone profile workspace manifest
+that applies the named profile's implementation overrides to the root `[workspace.dependencies]`.
+Optionally invokes `cargo build` inside that generated workspace.
+
+```
+cargo polylith profile build production
+cargo polylith profile build production --no-build
+```
+
+Flags:
+- `--no-build` — generate the workspace manifest without running `cargo build`
+
+#### `cargo polylith profile add <interface> --impl <path> --profile <name>`
+
+Adds or updates an implementation selection in a `.profile` file.
+
+```
+cargo polylith profile add http-client \
+  --impl components/http-client-hato \
+  --profile production
+```
+
+Creates `profiles/<name>.profile` if it does not exist.
 
 ---
 
@@ -438,6 +505,11 @@ my-mono/
       Cargo.toml          ← standalone [workspace]; [dependencies] selects real components
     bdd/
       Cargo.toml          ← test/dev project; [dependencies] uses stubs
+  profiles/
+    production.profile    ← implementation selections for production builds
+    staging.profile       ← implementation selections for staging builds
+    production/
+      Cargo.toml          ← generated by `profile build production`
 ```
 
 ---
