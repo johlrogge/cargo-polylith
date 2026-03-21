@@ -62,6 +62,10 @@ pub enum ViolationKind {
         project_version: String,
         workspace_version: String,
     },
+    /// A project exists under projects/ but is not listed in root workspace members.
+    ProjectNotInRootWorkspace {
+        project: String,
+    },
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -99,26 +103,7 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
         .iter()
         .flat_map(|b| b.deps.iter().flat_map(|d| resolve_dep(d)))
         .chain(map.projects.iter().flat_map(|p| {
-            p.deps.iter().flat_map(|dep_name| {
-                // If this dep is replaced by a patch, seed the BFS with the patched
-                // component's name so the stub is counted as reachable (not orphaned).
-                let patched = p
-                    .patches
-                    .iter()
-                    .find(|(patched_dep, _)| patched_dep == dep_name)
-                    .and_then(|(_, patch_path)| {
-                        map.components
-                            .iter()
-                            .chain(map.bases.iter())
-                            .find(|brick| brick.path == *patch_path)
-                            .map(|brick| brick.name.as_str())
-                    });
-                if let Some(name) = patched {
-                    vec![name]
-                } else {
-                    resolve_dep(dep_name)
-                }
-            })
+            p.deps.iter().flat_map(|dep_name| resolve_dep(dep_name))
         }))
         .collect();
     while let Some(name) = queue.pop_front() {
@@ -317,6 +302,29 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
         }
     }
 
+    // --- project workspace membership checks ---
+    if !map.root_members.is_empty() {
+        for project in &map.projects {
+            let rel = project
+                .path
+                .strip_prefix(&map.root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            if !map.root_members.iter().any(|m| member_covers(m, &rel)) {
+                violations.push(Violation {
+                    kind: ViolationKind::ProjectNotInRootWorkspace {
+                        project: project.name.clone(),
+                    },
+                    message: format!(
+                        "project '{}' is not listed in root workspace members \
+                         — add '{rel}' to [workspace] members in Cargo.toml",
+                        project.name
+                    ),
+                });
+            }
+        }
+    }
+
     // --- base checks ---
     for base in &map.bases {
         let lib_rs  = base.path.join("src/lib.rs");
@@ -409,6 +417,7 @@ pub fn is_warning_kind(k: &ViolationKind) -> bool {
         ViolationKind::MissingInterface => true,
         ViolationKind::ProjectFeatureDrift { .. } => true,
         ViolationKind::ProjectVersionDrift { .. } => true,
+        ViolationKind::ProjectNotInRootWorkspace { .. } => true,
         ViolationKind::MissingLibRs => false,
         ViolationKind::MissingImplFile => false,
         ViolationKind::BaseMissingLibRs => false,

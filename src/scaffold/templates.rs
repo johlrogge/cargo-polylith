@@ -48,19 +48,21 @@ pub fn claude_skill_md() -> &'static str {
     include_str!("claude_skill.md")
 }
 
-pub fn project_cargo_toml(_name: &str) -> String {
+pub fn project_cargo_toml(name: &str) -> String {
     format!(
-        r#"[workspace]
-members = [
-    # Add base crates here, e.g.:
-    # "../../bases/my-base",
-]
-resolver = "2"
+        r#"[package]
+name = "{name}"
+version = "0.1.0"
+edition = "2021"
 
-# Select component implementations via path dependencies:
-# [dependencies]
-# my-component = {{ path = "../../components/my-component" }}
-# my-component = {{ path = "../../components/my-component-stub", package = "my-component-stub" }}
+[[bin]]
+name = "{name}"
+path = "src/main.rs"
+
+[dependencies]
+# Add base and component deps here, e.g.:
+# my-base = {{ path = "../../bases/my-base" }}
+# my-component-stub = {{ path = "../../components/my-component-stub", package = "my-component-stub" }}
 "#
     )
 }

@@ -306,8 +306,7 @@ fn check_project_missing_base_is_warning() {
     fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
     fs::write(
         proj.join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n\
-         [package]\nname = \"standalone\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+        "[package]\nname = \"standalone\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
          [[bin]]\nname = \"standalone\"\npath = \"src/main.rs\"\n",
     ).unwrap();
 
@@ -320,7 +319,15 @@ fn check_project_missing_base_is_warning() {
 
 #[test]
 fn check_project_with_base_dep_passes() {
-    let tmp = init_valid_workspace();
+    let tmp = TempDir::new().unwrap();
+    // Root workspace members include projects/* so no project-not-in-workspace violation
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\", \"projects/*\"]\nresolver = \"2\"\n",
+    ).unwrap();
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
 
     // A proper lib base
     let base = tmp.path().join("bases/mybase");
@@ -331,14 +338,13 @@ fn check_project_with_base_dep_passes() {
         "[package]\nname = \"mybase\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
     ).unwrap();
 
-    // Project depending on that base
+    // Project depending on that base (new format: no [workspace] section)
     let proj = tmp.path().join("projects/wired");
     fs::create_dir_all(proj.join("src")).unwrap();
     fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
     fs::write(
         proj.join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n\
-         [package]\nname = \"wired\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+        "[package]\nname = \"wired\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
          [[bin]]\nname = \"wired\"\npath = \"src/main.rs\"\n\
          [dependencies]\nmybase = { path = \"../../bases/mybase\" }\n",
     ).unwrap();
@@ -454,8 +460,7 @@ fn check_test_project_marker_suppresses_no_base() {
     fs::write(proj.join("src/lib.rs"), "// tests\n").unwrap();
     fs::write(
         proj.join("Cargo.toml"),
-        "[workspace]\nmembers = [\".\"]\nresolver = \"2\"\n\
-         [package]\nname=\"bdd\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
+        "[package]\nname=\"bdd\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
          [package.metadata.polylith]\ntest-project = true\n",
     ).unwrap();
 
@@ -518,11 +523,12 @@ fn check_no_ambiguous_interface_when_default_impl_exists() {
         .stdout(predicate::str::contains("ambiguous-interface").not());
 }
 
-// ── patch substitution suppresses orphan ─────────────────────────────────────
+// ── project-not-in-workspace check ────────────────────────────────────────────
 
 #[test]
-fn check_patch_substitutes_dep_for_orphan_check() {
+fn check_project_not_in_root_workspace_is_warning() {
     let tmp = TempDir::new().unwrap();
+    // Root workspace members do NOT include projects/*
     fs::write(
         tmp.path().join("Cargo.toml"),
         "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
@@ -531,53 +537,55 @@ fn check_patch_substitutes_dep_for_orphan_check() {
         fs::create_dir(tmp.path().join(d)).unwrap();
     }
 
-    // Real component — declared as dep but patched away by the project
-    let real = tmp.path().join("components/my-svc");
-    fs::create_dir_all(real.join("src")).unwrap();
-    fs::write(real.join("src/lib.rs"), "pub struct MySvc;\n").unwrap();
-    fs::write(
-        real.join("Cargo.toml"),
-        "[package]\nname=\"my-svc\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
-    ).unwrap();
-
-    // Stub — different package name, used via [patch.crates-io]
-    let stub = tmp.path().join("components/my-svc-stub");
-    fs::create_dir_all(stub.join("src")).unwrap();
-    fs::write(stub.join("src/lib.rs"), "pub struct MySvc;\n").unwrap();
-    fs::write(
-        stub.join("Cargo.toml"),
-        "[package]\nname=\"my-svc-stub\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
-         [package.metadata.polylith]\ninterface = \"my-svc\"\n",
-    ).unwrap();
-
-    // Base (so we have at least one base)
-    let base = tmp.path().join("bases/cli");
-    fs::create_dir_all(base.join("src")).unwrap();
-    fs::write(base.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-    fs::write(
-        base.join("Cargo.toml"),
-        "[package]\nname=\"cli\"\nversion=\"0.1.0\"\nedition=\"2021\"\n",
-    ).unwrap();
-
-    // Project that patches my-svc → stub
-    let proj = tmp.path().join("projects/bdd");
+    // A project that is NOT in root members
+    let proj = tmp.path().join("projects/my-app");
     fs::create_dir_all(proj.join("src")).unwrap();
-    fs::write(proj.join("src/lib.rs"), "// tests\n").unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main() {}\n").unwrap();
     fs::write(
         proj.join("Cargo.toml"),
-        "[workspace]\nmembers = [\".\"]\nresolver = \"2\"\n\
-         [package]\nname=\"bdd\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
-         [dependencies]\nmy-svc = \"0.1\"\n\
-         [patch.crates-io]\n\
-         my-svc = { path = \"../../components/my-svc-stub\", package = \"my-svc-stub\" }\n",
+        "[package]\nname=\"my-app\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
+         [package.metadata.polylith]\ntest-project = true\n\
+         [[bin]]\nname = \"my-app\"\npath = \"src/main.rs\"\n\
+         [dependencies]\n",
     ).unwrap();
 
-    // my-svc-stub is used via patch — it should NOT be flagged as an orphan
+    // Should exit 0 (warning, not error) and show the tag
     cargo_polylith()
         .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("my-svc-stub").not());
+        .stdout(predicate::str::contains("project-not-in-workspace"));
+}
+
+#[test]
+fn check_project_in_root_workspace_no_violation() {
+    let tmp = TempDir::new().unwrap();
+    // Root workspace members DO include the project
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\", \"projects/*\"]\nresolver = \"2\"\n",
+    ).unwrap();
+    for d in &["components", "bases", "projects"] {
+        fs::create_dir(tmp.path().join(d)).unwrap();
+    }
+
+    // A project that IS covered by root members
+    let proj = tmp.path().join("projects/my-app");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(
+        proj.join("Cargo.toml"),
+        "[package]\nname=\"my-app\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
+         [package.metadata.polylith]\ntest-project = true\n\
+         [[bin]]\nname = \"my-app\"\npath = \"src/main.rs\"\n\
+         [dependencies]\n",
+    ).unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("project-not-in-workspace").not());
 }
 
 // ── helper ────────────────────────────────────────────────────────────────────
@@ -588,7 +596,7 @@ fn init_valid_workspace() -> TempDir {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\", \"projects/*\"]\nresolver = \"2\"\n",
     ).unwrap();
     for d in &["components", "bases", "projects"] {
         fs::create_dir(tmp.path().join(d)).unwrap();
@@ -603,7 +611,7 @@ fn check_dep_key_mismatch_is_hard_error() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\", \"projects/*\"]\nresolver = \"2\"\n",
     ).unwrap();
     for d in &["components", "bases", "projects"] {
         fs::create_dir(tmp.path().join(d)).unwrap();
@@ -635,8 +643,7 @@ fn check_dep_key_mismatch_is_hard_error() {
     fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
     fs::write(
         proj.join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n\
-         [package]\nname = \"beacon\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+        "[package]\nname = \"beacon\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
          [[bin]]\nname = \"beacon\"\npath = \"src/main.rs\"\n\
          [dependencies]\nmybase = { path = \"../../bases/mybase\" }\n\
          storage-primitives = { path = \"../../components/storage_primitives\" }\n",
@@ -654,7 +661,7 @@ fn check_dep_key_matching_package_name_passes() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\", \"projects/*\"]\nresolver = \"2\"\n",
     ).unwrap();
     for d in &["components", "bases", "projects"] {
         fs::create_dir(tmp.path().join(d)).unwrap();
@@ -686,8 +693,7 @@ fn check_dep_key_matching_package_name_passes() {
     fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
     fs::write(
         proj.join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n\
-         [package]\nname = \"beacon\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+        "[package]\nname = \"beacon\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
          [[bin]]\nname = \"beacon\"\npath = \"src/main.rs\"\n\
          [dependencies]\nmybase = { path = \"../../bases/mybase\" }\n\
          storage_primitives = { path = \"../../components/storage_primitives\" }\n",
@@ -705,7 +711,7 @@ fn check_dep_key_mismatch_with_package_alias_passes() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\", \"projects/*\"]\nresolver = \"2\"\n",
     ).unwrap();
     for d in &["components", "bases", "projects"] {
         fs::create_dir(tmp.path().join(d)).unwrap();
@@ -737,8 +743,7 @@ fn check_dep_key_mismatch_with_package_alias_passes() {
     fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
     fs::write(
         proj.join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n\
-         [package]\nname = \"beacon\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+        "[package]\nname = \"beacon\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
          [[bin]]\nname = \"beacon\"\npath = \"src/main.rs\"\n\
          [dependencies]\nmybase = { path = \"../../bases/mybase\" }\n\
          storage-primitives = { path = \"../../components/storage_primitives\", package = \"storage_primitives\" }\n",
@@ -811,7 +816,7 @@ fn init_drift_workspace(
     fs::write(
         tmp.path().join("Cargo.toml"),
         format!(
-            "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n\
+            "[workspace]\nmembers = [\"components/*\", \"bases/*\", \"projects/*\"]\nresolver = \"2\"\n\
              [workspace.dependencies]\nserde = {{ version = \"{ws_version}\", features = {feats} }}\n",
             ws_version = ws_version,
             feats = feat_list(ws_features),
@@ -829,8 +834,7 @@ fn init_drift_workspace(
     fs::write(
         proj.join("Cargo.toml"),
         format!(
-            "[workspace]\nmembers = []\nresolver = \"2\"\n\
-             [package]\nname = \"myapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+            "[package]\nname = \"myapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
              [[bin]]\nname = \"myapp\"\npath = \"src/main.rs\"\n\
              [dependencies]\nserde = {{ version = \"{proj_version}\", features = {feats} }}\n",
             proj_version = proj_version,
@@ -905,7 +909,7 @@ fn check_project_dep_only_in_project_no_violation() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n",
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\", \"projects/*\"]\nresolver = \"2\"\n",
     ).unwrap();
     for d in &["components", "bases", "projects"] {
         fs::create_dir(tmp.path().join(d)).unwrap();
@@ -915,8 +919,7 @@ fn check_project_dep_only_in_project_no_violation() {
     fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
     fs::write(
         proj.join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n\
-         [package]\nname = \"myapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+        "[package]\nname = \"myapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
          [[bin]]\nname = \"myapp\"\npath = \"src/main.rs\"\n\
          [dependencies]\nserde = { version = \"1.0\", features = [\"derive\"] }\n",
     ).unwrap();
@@ -935,7 +938,7 @@ fn check_workspace_true_dep_no_violation() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = [\"components/*\", \"bases/*\"]\nresolver = \"2\"\n\
+        "[workspace]\nmembers = [\"components/*\", \"bases/*\", \"projects/*\"]\nresolver = \"2\"\n\
          [workspace.dependencies]\nserde = { version = \"1.0\", features = [\"derive\", \"alloc\"] }\n",
     ).unwrap();
     for d in &["components", "bases", "projects"] {
@@ -946,8 +949,7 @@ fn check_workspace_true_dep_no_violation() {
     fs::write(proj.join("src/main.rs"), "fn main(){}\n").unwrap();
     fs::write(
         proj.join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n\
-         [package]\nname = \"myapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+        "[package]\nname = \"myapp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
          [[bin]]\nname = \"myapp\"\npath = \"src/main.rs\"\n\
          [dependencies]\nserde = { workspace = true }\n",
     ).unwrap();

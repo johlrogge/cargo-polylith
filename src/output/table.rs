@@ -152,6 +152,7 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::DepKeyMismatch { .. } => "dep-key-mismatch".red().to_string(),
             ViolationKind::ProjectFeatureDrift { .. } => "project-feature-drift".yellow().to_string(),
             ViolationKind::ProjectVersionDrift { .. } => "project-version-drift".yellow().to_string(),
+            ViolationKind::ProjectNotInRootWorkspace { .. } => "project-not-in-workspace".yellow().to_string(),
         };
         println!("  [{tag}] {}", v.message);
     }

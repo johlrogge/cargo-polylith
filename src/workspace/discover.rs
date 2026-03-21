@@ -353,60 +353,7 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
                 }
             }
         }
-        // [workspace.dependencies] — inherited by bases listed as workspace members;
-        // components resolved here (especially renamed ones) are active in this project.
-        if let Some(t) = doc
-            .get("workspace")
-            .and_then(|ws| ws.get("dependencies"))
-            .and_then(|t| t.as_table())
-        {
-            for (k, v) in t.iter() {
-                dep_set.insert(resolve_pkg_name(k, v));
-                if !has_package_alias(v) {
-                    if let Some(rel) = extract_path(v) {
-                        dep_paths.push((k.to_string(), path.join(&rel)));
-                    }
-                }
-            }
-        }
         let deps: Vec<String> = dep_set.into_iter().collect();
-        let members = doc
-            .get("workspace")
-            .and_then(|ws| ws.get("members"))
-            .and_then(|m| m.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str())
-                    .map(|s| path.join(s))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let patches: Vec<(String, PathBuf)> = doc
-            .get("patch")
-            .and_then(|p| p.get("crates-io"))
-            .and_then(|ci| ci.as_table())
-            .map(|t| {
-                t.iter()
-                    .filter_map(|(dep_name, item)| {
-                        // path = "..." may be in an inline table or a regular table
-                        let rel = item
-                            .as_value()
-                            .and_then(|v| v.as_inline_table())
-                            .and_then(|t| t.get("path"))
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                item.as_table()
-                                    .and_then(|t| t.get("path"))
-                                    .and_then(|v| v.as_value())
-                                    .and_then(|v| v.as_str())
-                            })?;
-                        let abs = path.join(rel);
-                        let canonical = std::fs::canonicalize(&abs).ok()?;
-                        Some((dep_name.to_string(), canonical))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         let test_project = doc
             .get("package")
             .and_then(|p| p.get("metadata"))
@@ -418,8 +365,6 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             name,
             path: path.clone(),
             deps,
-            members,
-            patches,
             test_project,
             dep_paths,
             external_deps,

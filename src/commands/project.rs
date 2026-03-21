@@ -11,6 +11,6 @@ pub fn new(name: &str, workspace_root: Option<&Path>) -> Result<()> {
     let root = resolve_root(&cwd, workspace_root)?;
     scaffold::create_project(&root, name)?;
     println!("Created project '{name}' at projects/{name}/");
-    println!("Edit projects/{name}/Cargo.toml to add bases as workspace members.");
+    println!("Edit projects/{name}/Cargo.toml to add base and component dependencies.");
     Ok(())
 }

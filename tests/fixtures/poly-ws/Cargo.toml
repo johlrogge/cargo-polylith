@@ -3,5 +3,6 @@ members = [
     "components/logger",
     "components/parser",
     "bases/cli",
+    "projects/main-project",
 ]
 resolver = "2"
