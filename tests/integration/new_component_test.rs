@@ -124,6 +124,7 @@ fn base_new_creates_files() {
 
     let base = dir.path().join("bases/my_base");
     assert!(base.join("Cargo.toml").exists(), "Cargo.toml missing");
+    assert!(base.join("src/lib.rs").exists(), "src/lib.rs missing");
     assert!(base.join("src/main.rs").exists(), "src/main.rs missing");
 }
 

@@ -7,5 +7,8 @@ pub fn validate_brick_name(name: &str) -> Result<()> {
     if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
         bail!("name must contain only alphanumeric characters, underscores, or hyphens");
     }
+    if !name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+        bail!("name must start with a letter or underscore");
+    }
     Ok(())
 }

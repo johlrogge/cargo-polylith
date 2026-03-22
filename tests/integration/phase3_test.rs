@@ -201,4 +201,11 @@ fn invalid_component_name_gives_error() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("error"));
+
+    cargo_polylith()
+        .args(["polylith", "component", "new", "1foo"])
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error"));
 }

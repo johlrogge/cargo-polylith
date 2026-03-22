@@ -98,6 +98,8 @@ pub fn create_base(root: &Path, name: &str) -> Result<()> {
 
     fs::write(dir.join("Cargo.toml"), base_cargo_toml(name))
         .context("writing base Cargo.toml")?;
+    fs::write(src.join("lib.rs"), base_lib_rs())
+        .context("writing lib.rs")?;
     fs::write(src.join("main.rs"), base_main_rs())
         .context("writing main.rs")?;
 

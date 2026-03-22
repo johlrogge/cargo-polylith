@@ -44,6 +44,10 @@ pub fn base_main_rs() -> &'static str {
     "fn main() {\n    println!(\"Hello from base!\");\n}\n"
 }
 
+pub fn base_lib_rs() -> &'static str {
+    "pub fn run() {}\n"
+}
+
 pub fn claude_skill_md() -> &'static str {
     include_str!("claude_skill.md")
 }
