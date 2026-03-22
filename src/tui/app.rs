@@ -61,6 +61,8 @@ pub struct App {
     pub workspace_root: PathBuf,
     pub input_mode: InputMode,
     pub input_buffer: String,
+    pub pending_g: bool,
+    pub confirm_quit: bool,
     /// Component dependency graph — used to recompute transitive states on toggle.
     comp_deps: HashMap<String, Vec<String>>,
     /// Direct deps per project column (indexed by col).
@@ -167,6 +169,8 @@ impl App {
             workspace_root: map.root.clone(),
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
+            pending_g: false,
+            confirm_quit: false,
             comp_deps,
             project_direct_deps,
             base_names,
@@ -322,6 +326,7 @@ impl App {
     pub fn start_edit_interface(&mut self) {
         let row = &self.rows[self.cursor_row];
         if row.kind != RowKind::Component {
+            self.status = "Bases do not have interfaces".into();
             return;
         }
         self.input_mode = InputMode::EditingInterface;
