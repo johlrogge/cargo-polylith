@@ -2,6 +2,17 @@
 
 ## Shipped
 
+### 0.7.0 — Base update, project set-impl, profile new, MCP expansion, ADRs ✅
+
+Commands and tooling:
+
+- `cargo polylith base update [--test-base]` — toggle a base between standard and test-base; sets or removes `test-base = true` in `[package.metadata.polylith]`
+- `cargo polylith project set-impl <project> <interface> --implementation <name>` — write or update a component implementation selection in a project's `Cargo.toml`
+- `cargo polylith profile new <name>` — create a new empty profile file at `profiles/<name>.profile`
+- Name validation in `project new` and all MCP `_new` tools — rejects names with invalid characters before touching the filesystem
+- New MCP write tools: `polylith_base_update`, `polylith_profile_new`, `polylith_profile_list`, `polylith_profile_add`
+- 10 Architecture Decision Records added under `docs/adr/`
+
 ### 0.6.0 — Polylith profiles ✅
 
 Named implementation sets that mirror the Clojure polylith profiles concept.
