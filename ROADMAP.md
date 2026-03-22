@@ -32,7 +32,7 @@ stdin/stdout JSON-RPC transport, wires directly into Claude Code and other MCP c
 
 ## Next — model alignment
 
-### ⚠️ Model correction: projects as bin crates, workspace as profile [HIGHEST PRIORITY]
+### ✅ Model correction: projects as bin crates, workspace as profile
 
 The current model treats each project as a separate Cargo workspace under `projects/`.
 This contradicts polylith's core principle of "one workspace, many deployable artifacts"
@@ -67,6 +67,16 @@ implementations per context (dev vs prod). In this Cargo model, the workspace co
 scope (what is compiled) and each project's `[dependencies]` controls selection (which
 implementation). Is this two-mechanism split a faithful mapping, or does it miss
 something about how profiles are intended to work?
+
+---
+
+### ✅ TUI keybinding improvements (`cargo polylith edit`)
+
+- `Esc` no longer quits — clears the status message instead (safe reset, Helix convention)
+- `n` moved to `Ctrl-n` for new project — frees `n` from conflicting with Helix's next-search-match
+- `gg` / `G` — jump to first/last row in the grid
+- Dirty-quit guard — on first `q` with unsaved changes, warns "Unsaved changes — press w to save or q again to quit"; second `q` force-quits
+- `i` on a base row now shows "Bases do not have interfaces" instead of silently doing nothing
 
 ---
 

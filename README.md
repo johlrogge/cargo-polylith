@@ -51,9 +51,11 @@ context (selected by path dependency in a project workspace).
 components and expose a library API (`src/lib.rs`) so that project workspace manifests can call
 their `run()` function from a thin `src/main.rs`. Bases must not have their own `src/main.rs`.
 
-**Projects** — standalone Cargo workspaces in `projects/`. Each project is an independently
-buildable workspace that selects a specific combination of bases and component implementations
-via path dependencies in `[dependencies]`.
+**Projects** — bin crates under `projects/`, listed as members of the root workspace. Each project
+selects a specific combination of bases and component implementations via path dependencies in
+`[dependencies]`. Projects are workspace members — not sub-workspaces of their own. Having a
+`[workspace]` section in a project `Cargo.toml`, or a project that is not listed in the root
+workspace members, is a hard error.
 
 **Development project** — the root workspace itself. It contains all components and bases and
 is optimised for fast feedback during development and testing. Components in the root workspace
@@ -121,7 +123,8 @@ cargo polylith base new api
 
 # 5. Create a deployable project
 cargo polylith project new production
-# → projects/production/Cargo.toml  (standalone workspace, add [dependencies] for impls)
+# → projects/production/Cargo.toml  (bin crate, added to root workspace members)
+# → projects/production/src/main.rs
 
 # 6. Inspect the workspace
 cargo polylith info
@@ -245,7 +248,9 @@ Produces:
 
 ```
 projects/production/
-  Cargo.toml     ← standalone [workspace], add [dependencies] for component impls
+  Cargo.toml     ← bin crate; also added to root workspace members
+  src/
+    main.rs      ← thin entry point; calls a base's run()
 ```
 
 Edit the manifest to add the bases you want to ship and declare which component
@@ -337,6 +342,8 @@ cargo polylith check
 | `missing-lib` | Component or base has no `src/lib.rs` |
 | `missing-impl` | Component has no `src/lib.rs` AND no `src/<name>.rs` |
 | `dep-key-mismatch` | A path dependency key does not match the target crate's `package.name` — use the correct name as the dep key, or add `package = "..."` as an alias |
+| `project-has-own-workspace` | A project `Cargo.toml` contains a `[workspace]` section — projects must be bin crates in the root workspace, not sub-workspaces |
+| `project-not-in-root-workspace` | A project under `projects/` is not listed as a member of the root workspace `[workspace].members` |
 
 **Warnings** (exit 0):
 
@@ -451,10 +458,12 @@ Key bindings:
 |---|---|
 | `←→↑↓` / `hjkl` | Navigate |
 | `Space` | Toggle direct dependency on/off |
-| `i` | Edit the component's interface name (Enter to save, Esc to cancel) |
+| `i` | Edit the component's interface name (Enter to save, Esc to cancel); shows "Bases do not have interfaces" on base rows |
 | `w` | Write changes to disk |
-| `n` | Create a new project |
-| `q` / `Esc` | Quit |
+| `Ctrl-n` | Create a new project |
+| `Esc` | Clear status message |
+| `q` | Quit (warns on first press if there are unsaved changes; press `q` again to force-quit) |
+| `gg` / `G` | Jump to first / last row |
 
 ---
 
@@ -547,9 +556,11 @@ my-mono/
       src/lib.rs          ← exposes run()
   projects/
     production/
-      Cargo.toml          ← standalone [workspace]; [dependencies] selects real components
+      Cargo.toml          ← bin crate (root workspace member); [dependencies] selects real components
+      src/main.rs
     bdd/
-      Cargo.toml          ← test/dev project; [dependencies] uses stubs
+      Cargo.toml          ← test/dev project (root workspace member); [dependencies] uses stubs
+      src/main.rs
   profiles/
     production.profile    ← implementation selections for production builds
     staging.profile       ← implementation selections for staging builds
