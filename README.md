@@ -218,6 +218,21 @@ Also appends `"bases/rest-api"` to `[workspace].members`.
 
 ---
 
+### `cargo polylith base update <name>`
+
+Toggles a base between a standard base and a test-base.
+
+```
+cargo polylith base update rest-api
+cargo polylith base update rest-api --test-base
+```
+
+`--test-base` sets `[package.metadata.polylith] test-base = true` in the base's `Cargo.toml`,
+which suppresses the `no-base` warning for projects that depend only on this base.
+Omitting the flag removes the annotation (or keeps it absent), reverting to a standard base.
+
+---
+
 ### `cargo polylith project new <name>`
 
 Creates a project workspace manifest.
@@ -245,6 +260,21 @@ library-service = { path = "../../components/library_service" }
 # library-service = { path = "../../components/library_service_stub",
 #                     package = "library-service-stub" }
 ```
+
+---
+
+### `cargo polylith project set-impl <project> <interface> --implementation <name>`
+
+Selects a component implementation for a project by updating its `Cargo.toml`.
+
+```
+cargo polylith project set-impl production http-client --implementation http-client-hato
+```
+
+Writes or updates the path dependency entry in `projects/<project>/Cargo.toml` so that
+the named interface resolves to the specified component implementation. Equivalent to
+manually editing the `[dependencies]` block, but validates that the implementation
+exists in the workspace first.
 
 ---
 
@@ -348,6 +378,17 @@ email-sender = "components/email-sender-smtp"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 ```
 
+#### `cargo polylith profile new <name>`
+
+Creates a new empty profile file.
+
+```
+cargo polylith profile new staging
+```
+
+Creates `profiles/staging.profile` with an empty `[implementations]` section.
+Use `profile add` to populate it.
+
 #### `cargo polylith profile list`
 
 Lists all profiles and their implementation selections.
@@ -443,9 +484,13 @@ Communicates over stdin/stdout using the standard MCP JSON-RPC transport.
 |---|---|
 | `polylith_component_new` | Create a new component crate |
 | `polylith_base_new` | Create a new base crate |
+| `polylith_base_update` | Toggle a base between standard and test-base |
 | `polylith_project_new` | Create a new project workspace |
 | `polylith_component_update` | Update a component's interface annotation |
 | `polylith_set_implementation` | Select a component implementation for a project |
+| `polylith_profile_new` | Create a new empty profile file |
+| `polylith_profile_list` | List all profiles and their implementation selections |
+| `polylith_profile_add` | Add or update an implementation selection in a profile |
 
 To wire up an AI assistant (e.g. Claude Code), add to `.mcp.json` at the workspace root:
 

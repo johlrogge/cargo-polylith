@@ -51,6 +51,9 @@ pub struct Project {
     pub deps: Vec<String>,
     /// True when `[package.metadata.polylith] test-project = true` — suppresses `no-base` warning.
     pub test_project: bool,
+    /// True when this project's Cargo.toml contains its own `[workspace]` section.
+    /// Projects must be plain bin crates in the root workspace, not sub-workspaces.
+    pub has_own_workspace: bool,
     /// Raw path dependencies: (dep_key, resolved_absolute_path). Used to validate
     /// that dep keys match the target package name. Only populated for deps that
     /// have a `path = "..."` value and no `package = "..."` alias.

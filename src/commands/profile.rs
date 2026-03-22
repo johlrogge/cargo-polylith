@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::commands::validate::validate_brick_name;
 use crate::output::table;
 use crate::workspace::{build_workspace_map, discover_profiles, resolve_profile_workspace, resolve_root};
 
@@ -57,5 +58,14 @@ pub fn add(
     let root = resolve_root(&cwd, workspace_root)?;
     crate::scaffold::add_profile_impl(&root, profile_name, interface, impl_path)?;
     println!("Updated profiles/{}.profile: {} → {}", profile_name, interface, impl_path);
+    Ok(())
+}
+
+pub fn new(name: &str, workspace_root: Option<&Path>) -> Result<()> {
+    validate_brick_name(name)?;
+    let cwd = env::current_dir()?;
+    let root = resolve_root(&cwd, workspace_root)?;
+    crate::scaffold::create_profile(&root, name)?;
+    println!("Created profiles/{name}.profile");
     Ok(())
 }

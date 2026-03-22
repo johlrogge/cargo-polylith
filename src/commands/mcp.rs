@@ -5,8 +5,9 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::{json, Value};
 
+use crate::commands::validate::validate_brick_name;
 use crate::scaffold;
-use crate::workspace::{build_workspace_map, classify_dep, resolve_root, run_checks, run_status, DepKind};
+use crate::workspace::{build_workspace_map, classify_dep, discover_profiles, resolve_root, run_checks, run_status, DepKind};
 
 pub fn serve(workspace_root: Option<&Path>, write: bool) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -89,6 +90,11 @@ fn tools_list(id: Value, write: bool) -> Value {
             "description": "Show a lenient audit of workspace structure (divergences and suggestions)",
             "inputSchema": { "type": "object", "properties": {} }
         }),
+        json!({
+            "name": "polylith_profile_list",
+            "description": "List all polylith profiles and their implementation selections",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
     ];
 
     if write {
@@ -149,6 +155,42 @@ fn tools_list(id: Value, write: bool) -> Value {
                         "project": { "type": "string", "description": "Project name" },
                         "interface": { "type": "string", "description": "Interface (crate name) to patch" },
                         "implementation": { "type": "string", "description": "Component name providing the implementation" }
+                    }
+                }
+            }),
+            json!({
+                "name": "polylith_profile_new",
+                "description": "Create a new empty profile file at profiles/<name>.profile",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": { "type": "string", "description": "Profile name (without .profile extension)" }
+                    }
+                }
+            }),
+            json!({
+                "name": "polylith_profile_add",
+                "description": "Add or update an implementation selection in a profile",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["profile", "interface", "implementation"],
+                    "properties": {
+                        "profile": { "type": "string", "description": "Profile name (without .profile extension)" },
+                        "interface": { "type": "string", "description": "Interface dep key" },
+                        "implementation": { "type": "string", "description": "Path to the implementation component (relative to workspace root)" }
+                    }
+                }
+            }),
+            json!({
+                "name": "polylith_base_update",
+                "description": "Update metadata on an existing base (e.g. set test-base flag)",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": { "type": "string", "description": "Base name" },
+                        "test_base": { "type": "boolean", "description": "Set to true to mark this as a test-base" }
                     }
                 }
             }),
@@ -294,9 +336,16 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
             Err(e) => format!("error: {e:#}"),
         },
 
+        // ── read profile tool ───────────────────────────────────────────────
+        "polylith_profile_list" => match discover_profiles(root) {
+            Ok(profiles) => serde_json::to_string_pretty(&profiles).unwrap_or_else(|e| e.to_string()),
+            Err(e) => format!("error: {e:#}"),
+        },
+
         // ── write tools ─────────────────────────────────────────────────────
         "polylith_component_new" | "polylith_base_new" | "polylith_project_new"
         | "polylith_component_update" | "polylith_set_implementation"
+        | "polylith_profile_new" | "polylith_profile_add" | "polylith_base_update"
             if !write =>
         {
             "write tools disabled — restart the MCP server with --write to enable scaffolding"
@@ -309,7 +358,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                 .get("interface")
                 .and_then(|v| v.as_str())
                 .unwrap_or(comp_name);
-            match scaffold::create_component(root, comp_name, interface) {
+            match validate_brick_name(comp_name).and_then(|()| scaffold::create_component(root, comp_name, interface)) {
                 Ok(()) => format!("created component '{comp_name}' with interface '{interface}'"),
                 Err(e) => format!("error: {e:#}"),
             }
@@ -317,7 +366,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
 
         "polylith_base_new" => {
             let base_name = arguments["name"].as_str().unwrap_or("");
-            match scaffold::create_base(root, base_name) {
+            match validate_brick_name(base_name).and_then(|()| scaffold::create_base(root, base_name)) {
                 Ok(()) => format!("created base '{base_name}'"),
                 Err(e) => format!("error: {e:#}"),
             }
@@ -325,7 +374,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
 
         "polylith_project_new" => {
             let project_name = arguments["name"].as_str().unwrap_or("");
-            match scaffold::create_project(root, project_name) {
+            match validate_brick_name(project_name).and_then(|()| scaffold::create_project(root, project_name)) {
                 Ok(()) => format!("created project '{project_name}'"),
                 Err(e) => format!("error: {e:#}"),
             }
@@ -369,6 +418,43 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                         }
                         (None, _) => format!("project '{project_name}' not found"),
                         (_, None) => format!("component '{impl_name}' not found"),
+                    }
+                }
+                Err(e) => format!("error: {e:#}"),
+            }
+        }
+
+        "polylith_profile_new" => {
+            let profile_name = arguments["name"].as_str().unwrap_or("");
+            match validate_brick_name(profile_name).and_then(|()| scaffold::create_profile(root, profile_name)) {
+                Ok(()) => format!("created profile '{profile_name}'"),
+                Err(e) => format!("error: {e:#}"),
+            }
+        }
+
+        "polylith_profile_add" => {
+            let profile_name = arguments["profile"].as_str().unwrap_or("");
+            let interface = arguments["interface"].as_str().unwrap_or("");
+            let implementation = arguments["implementation"].as_str().unwrap_or("");
+            match scaffold::add_profile_impl(root, profile_name, interface, implementation) {
+                Ok(()) => format!("updated profile '{profile_name}': {interface} → {implementation}"),
+                Err(e) => format!("error: {e:#}"),
+            }
+        }
+
+        "polylith_base_update" => {
+            let base_name = arguments["name"].as_str().unwrap_or("");
+            let test_base = arguments.get("test_base").and_then(|v| v.as_bool()).unwrap_or(false);
+            match build_workspace_map(root) {
+                Ok(map) => {
+                    match map.bases.iter().find(|b| b.name == base_name) {
+                        Some(base) => {
+                            match scaffold::write_test_base_to_toml(&base.path, test_base) {
+                                Ok(()) => format!("updated base '{base_name}': test-base = {test_base}"),
+                                Err(e) => format!("error: {e:#}"),
+                            }
+                        }
+                        None => format!("base '{base_name}' not found in workspace"),
                     }
                 }
                 Err(e) => format!("error: {e:#}"),

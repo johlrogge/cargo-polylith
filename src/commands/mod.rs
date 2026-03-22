@@ -10,3 +10,4 @@ pub mod init;
 pub mod profile;
 pub mod project;
 pub mod status;
+pub mod validate;

@@ -93,6 +93,7 @@ storage = "components/storage-memory"
 Profile commands:
 
 ```bash
+cargo polylith profile new <name>                 # create a new empty profile
 cargo polylith profile list [--json]              # list defined profiles and their mappings
 cargo polylith profile build <name> [--no-build]  # activate a profile (patch Cargo.tomls); --no-build patches only
 cargo polylith profile add <interface> \
@@ -117,9 +118,13 @@ the user before creating or modifying workspace structure.
 |---|---|---|
 | `polylith_component_new` | Create component under `components/<name>/` | `name`; optional `interface` (defaults to name) |
 | `polylith_base_new` | Create base under `bases/<name>/` | `name` |
+| `polylith_base_update` | Toggle a base between sharp and test-base mode | `name`; optional `test_base` (bool, default false) |
 | `polylith_project_new` | Create project workspace under `projects/<name>/` | `name` |
 | `polylith_component_update` | Set or update interface annotation on existing component | `name`, `interface` |
 | `polylith_set_implementation` | Wire a component implementation into a project | `project`, `interface`, `implementation` |
+| `polylith_profile_list` | List defined profiles and their interface-to-implementation mappings | — |
+| `polylith_profile_new` | Create a new empty profile | `name` |
+| `polylith_profile_add` | Add or update one mapping in a profile | `profile`, `interface`, `implementation` |
 
 If MCP write tools are unavailable (server started without `--write`, or MCP not active),
 fall back to the CLI equivalents:
@@ -127,7 +132,10 @@ fall back to the CLI equivalents:
 ```bash
 cargo polylith component new <name> [--interface <iface>]
 cargo polylith base new <name>
+cargo polylith base update <name> [--test-base]
 cargo polylith project new <name>
+cargo polylith project set-impl <project> <interface> --implementation <name>
+cargo polylith profile new <name>
 ```
 
 ## Violation model

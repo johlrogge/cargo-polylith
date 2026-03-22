@@ -1,13 +1,14 @@
 use std::env;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
+use crate::commands::validate::validate_brick_name;
 use crate::scaffold;
 use crate::workspace::{build_workspace_map, resolve_root};
 
 pub fn new(name: &str, interface: Option<&str>, workspace_root: Option<&Path>) -> Result<()> {
-    validate_name(name)?;
+    validate_brick_name(name)?;
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
     let iface = interface.unwrap_or(name);
@@ -17,7 +18,7 @@ pub fn new(name: &str, interface: Option<&str>, workspace_root: Option<&Path>) -
 }
 
 pub fn update(name: &str, interface: Option<&str>, workspace_root: Option<&Path>) -> Result<()> {
-    validate_name(name)?;
+    validate_brick_name(name)?;
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
     let map = build_workspace_map(&root)?;
@@ -32,12 +33,3 @@ pub fn update(name: &str, interface: Option<&str>, workspace_root: Option<&Path>
     Ok(())
 }
 
-fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("component name cannot be empty");
-    }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-        bail!("component name must contain only alphanumeric characters, underscores, or hyphens");
-    }
-    Ok(())
-}
