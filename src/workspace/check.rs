@@ -188,11 +188,11 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
     // --- project checks ---
     for project in &map.projects {
         let has_base_dep = project.deps.iter().any(|d| base_names.contains(d.as_str()));
-        if !has_base_dep && !project.test_project {
+        if !has_base_dep {
             violations.push(Violation {
                 kind: ViolationKind::ProjectMissingBase,
                 message: format!(
-                    "project '{}' has no base dependency — deliverable projects must include at least one base; set `[package.metadata.polylith] test-project = true` to suppress for test/dev projects",
+                    "project '{}' has no base dependency — polylith projects must include at least one base",
                     project.name
                 ),
             });

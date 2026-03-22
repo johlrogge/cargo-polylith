@@ -473,28 +473,6 @@ fn check_duplicate_component_name_is_warning() {
         .stdout(predicate::str::contains("duplicate-name"));
 }
 
-// ── test-project marker suppresses no-base ───────────────────────────────────
-
-#[test]
-fn check_test_project_marker_suppresses_no_base() {
-    let tmp = init_valid_workspace();
-
-    let proj = tmp.path().join("projects/bdd");
-    fs::create_dir_all(proj.join("src")).unwrap();
-    fs::write(proj.join("src/lib.rs"), "// tests\n").unwrap();
-    fs::write(
-        proj.join("Cargo.toml"),
-        "[package]\nname=\"bdd\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
-         [package.metadata.polylith]\ntest-project = true\n",
-    ).unwrap();
-
-    cargo_polylith()
-        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("no-base").not());
-}
-
 // ── ambiguous interface warning ───────────────────────────────────────────────
 
 #[test]
@@ -568,7 +546,6 @@ fn check_project_not_in_root_workspace_is_error() {
     fs::write(
         proj.join("Cargo.toml"),
         "[package]\nname=\"my-app\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
-         [package.metadata.polylith]\ntest-project = true\n\
          [[bin]]\nname = \"my-app\"\npath = \"src/main.rs\"\n\
          [dependencies]\n",
     ).unwrap();
@@ -600,7 +577,6 @@ fn check_project_in_root_workspace_no_violation() {
     fs::write(
         proj.join("Cargo.toml"),
         "[package]\nname=\"my-app\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
-         [package.metadata.polylith]\ntest-project = true\n\
          [[bin]]\nname = \"my-app\"\npath = \"src/main.rs\"\n\
          [dependencies]\n",
     ).unwrap();

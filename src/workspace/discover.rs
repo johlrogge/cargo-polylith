@@ -431,13 +431,6 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             }
         }
         let deps: Vec<String> = dep_set.into_iter().collect();
-        let test_project = doc
-            .get("package")
-            .and_then(|p| p.get("metadata"))
-            .and_then(|m| m.get("polylith"))
-            .and_then(|p| p.get("test-project"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
         let has_own_workspace = doc.get("workspace").is_some();
         // Extract the `name` field from the first `[[bin]]` entry, if present.
         let bin_name = doc
@@ -452,7 +445,6 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             name,
             path: path.clone(),
             deps,
-            test_project,
             has_own_workspace,
             bin_name,
             dep_paths,

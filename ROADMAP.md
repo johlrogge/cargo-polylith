@@ -85,13 +85,6 @@ When the cursor rests on a cell marked as transitive, show the dependency chain
 that explains *why* it is pulled in — e.g. `scaffold via: myproject → cli (base) → mcp → scaffold`.
 Shown in the status bar.
 
-### Check rule configuration
-Support named rule sets so teams can define custom check rules, output formats,
-or workspace conventions in `.polylith/config.toml` (or similar). Lets different
-projects opt in to stricter or more lenient rule sets without forking the tool.
-> Note: implementation-selection profiles (`cargo polylith profile`) shipped in 0.6.0.
-> This item covers a separate concept: configurable check rules.
-
 ### Docs pass with the documenter agent ✅
 README.md and ROADMAP.md updated to reflect the current feature set (MCP server,
 TUI edit, check hardening, polylith profiles).
