@@ -70,6 +70,25 @@ pub fn write_interface_to_toml(component_path: &Path, interface: &str) -> Result
     Ok(())
 }
 
+/// Write or update the `[package.metadata.polylith] test-base` key in a base's `Cargo.toml`.
+/// Creates the metadata tables if they don't exist.
+pub fn write_test_base_to_toml(base_path: &Path, test_base: bool) -> Result<()> {
+    let manifest_path = base_path.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let mut doc: DocumentMut = content.parse().context("parsing Cargo.toml")?;
+    if doc["package"].get("metadata").is_none() {
+        doc["package"]["metadata"] = toml_edit::table();
+    }
+    if doc["package"]["metadata"].get("polylith").is_none() {
+        doc["package"]["metadata"]["polylith"] = toml_edit::table();
+    }
+    doc["package"]["metadata"]["polylith"]["test-base"] = toml_edit::value(test_base);
+    fs::write(&manifest_path, doc.to_string())
+        .with_context(|| format!("writing {}", manifest_path.display()))?;
+    Ok(())
+}
+
 /// Create a new base under `<root>/bases/<name>/`.
 pub fn create_base(root: &Path, name: &str) -> Result<()> {
     let dir = root.join("bases").join(name);
@@ -223,6 +242,21 @@ pub fn write_profile_workspace(
         .with_context(|| format!("writing {}", out_path.display()))?;
 
     Ok(out_path)
+}
+
+/// Create a new empty profile file at `profiles/<name>.profile`.
+/// Initialises it with an empty `[implementations]` table.
+pub fn create_profile(root: &Path, name: &str) -> Result<()> {
+    let profiles_dir = root.join("profiles");
+    fs::create_dir_all(&profiles_dir)
+        .with_context(|| format!("creating {}", profiles_dir.display()))?;
+    let profile_path = profiles_dir.join(format!("{name}.profile"));
+    if profile_path.exists() {
+        anyhow::bail!("profile '{name}' already exists at {}", profile_path.display());
+    }
+    fs::write(&profile_path, "[implementations]\n")
+        .with_context(|| format!("writing {}", profile_path.display()))?;
+    Ok(())
 }
 
 /// Add or update an implementation entry in a profile file.

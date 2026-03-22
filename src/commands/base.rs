@@ -1,13 +1,14 @@
 use std::env;
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::{Context, Result};
 
+use crate::commands::validate::validate_brick_name;
 use crate::scaffold;
-use crate::workspace::resolve_root;
+use crate::workspace::{build_workspace_map, resolve_root};
 
 pub fn new(name: &str, workspace_root: Option<&Path>) -> Result<()> {
-    validate_name(name)?;
+    validate_brick_name(name)?;
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
     scaffold::create_base(&root, name)?;
@@ -15,12 +16,17 @@ pub fn new(name: &str, workspace_root: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("base name cannot be empty");
-    }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-        bail!("base name must contain only alphanumeric characters, underscores, or hyphens");
-    }
+pub fn update(name: &str, test_base: bool, workspace_root: Option<&Path>) -> Result<()> {
+    validate_brick_name(name)?;
+    let cwd = env::current_dir()?;
+    let root = resolve_root(&cwd, workspace_root)?;
+    let map = build_workspace_map(&root)?;
+    let base = map
+        .bases
+        .iter()
+        .find(|b| b.name == name)
+        .with_context(|| format!("base '{name}' not found in workspace"))?;
+    scaffold::write_test_base_to_toml(&base.path, test_base)?;
+    println!("Updated base '{name}': test-base = {test_base}");
     Ok(())
 }

@@ -38,12 +38,29 @@ fn check_json_fixture_has_only_warning_violations() {
     let text = std::str::from_utf8(&out).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(text).expect("not valid JSON");
     let violations = parsed["violations"].as_array().unwrap();
-    // All violations from the fixture are warnings (hardwired-dep); no hard errors.
-    // The cli base has path deps on logger and parser; parser has a path dep on logger.
-    // Struct variants serialize as objects, so we check the "hardwired_dep" key.
+    // All violations from the fixture are warnings (no hard errors).
+    // The cli base has path deps on logger and parser; parser has a path dep on logger
+    // (hardwired-dep). standalone-project has its own [workspace] section, is not
+    // in root workspace members, and has no base dep
+    // (project_has_own_workspace, project_not_in_root_workspace, project_missing_base).
+    let allowed_warning_kinds = [
+        "hardwired_dep",
+        "project_has_own_workspace",
+        "project_not_in_root_workspace",
+        "project_missing_base",
+        "missing_interface",
+    ];
     assert!(
-        violations.iter().all(|v| v["kind"].get("hardwired_dep").is_some()),
-        "expected only hardwired_dep warnings, got: {violations:?}"
+        violations.iter().all(|v| {
+            if let Some(obj) = v["kind"].as_object() {
+                obj.keys().any(|k| allowed_warning_kinds.contains(&k.as_str()))
+            } else if let Some(s) = v["kind"].as_str() {
+                allowed_warning_kinds.contains(&s)
+            } else {
+                false
+            }
+        }),
+        "expected only warning violations, got: {violations:?}"
     );
 }
 
@@ -983,4 +1000,24 @@ fn check_project_feature_drift_disjoint_is_warning() {
         .assert()
         .success()  // warning → exit 0
         .stdout(predicate::str::contains("project-feature-drift"));
+}
+
+// ── project with own [workspace] section is a warning ─────────────────────────
+
+#[test]
+fn check_warns_project_with_own_workspace() {
+    let tmp = init_valid_workspace();
+    let proj = tmp.path().join("projects/bad-project");
+    fs::create_dir_all(proj.join("src")).unwrap();
+    fs::write(proj.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(proj.join("Cargo.toml"),
+        "[package]\nname = \"bad-project\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [workspace]\nmembers = []\nresolver = \"2\"\n\n[dependencies]\n",
+    ).unwrap();
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
+        .assert()
+        .success()  // warning only — exit 0
+        .stdout(predicate::str::contains("bad-project")
+            .and(predicate::str::contains("[workspace]")));
 }

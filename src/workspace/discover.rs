@@ -438,11 +438,13 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             .and_then(|p| p.get("test-project"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let has_own_workspace = doc.get("workspace").is_some();
         projects.push(Project {
             name,
             path: path.clone(),
             deps,
             test_project,
+            has_own_workspace,
             dep_paths,
             external_deps,
         });
@@ -669,8 +671,17 @@ mod tests {
     #[test]
     fn builds_workspace_map_projects() {
         let map = build_workspace_map(&fixture()).unwrap();
-        assert_eq!(map.projects.len(), 1);
-        assert_eq!(map.projects[0].name, "main-project");
+        assert!(map.projects.len() >= 2, "expected at least 2 projects, got {}", map.projects.len());
+        assert!(map.projects.iter().any(|p| p.name == "main-project"), "main-project missing");
+    }
+
+    #[test]
+    fn detects_project_with_own_workspace() {
+        let map = build_workspace_map(&fixture()).unwrap();
+        let standalone = map.projects.iter().find(|p| p.name == "standalone-project").unwrap();
+        assert!(standalone.has_own_workspace);
+        let main = map.projects.iter().find(|p| p.name == "main-project").unwrap();
+        assert!(!main.has_own_workspace);
     }
 
     #[test]

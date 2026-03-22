@@ -111,6 +111,11 @@ pub enum McpAction {
 
 #[derive(Subcommand)]
 pub enum ProfileAction {
+    /// Create a new empty profile
+    New {
+        /// Profile name (without .profile extension)
+        name: String,
+    },
     /// List all profiles and their implementation selections
     List {
         /// Output as JSON
@@ -165,6 +170,14 @@ pub enum BaseAction {
         /// Name of the base (snake_case)
         name: String,
     },
+    /// Update metadata on an existing base
+    Update {
+        /// Name of the base
+        name: String,
+        /// Mark this base as a test-base
+        #[arg(long, default_value_t = false)]
+        test_base: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -173,5 +186,15 @@ pub enum ProjectAction {
     New {
         /// Name of the project
         name: String,
+    },
+    /// Select which component implementation to use for an interface in a project
+    SetImpl {
+        /// Project name
+        project: String,
+        /// Interface name (the dep key)
+        interface: String,
+        /// Component name providing the implementation
+        #[arg(long)]
+        implementation: String,
     },
 }

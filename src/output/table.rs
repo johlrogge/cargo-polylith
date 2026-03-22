@@ -153,6 +153,7 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::ProjectFeatureDrift { .. } => "project-feature-drift".yellow().to_string(),
             ViolationKind::ProjectVersionDrift { .. } => "project-version-drift".yellow().to_string(),
             ViolationKind::ProjectNotInRootWorkspace { .. } => "project-not-in-workspace".yellow().to_string(),
+            ViolationKind::ProjectHasOwnWorkspace { .. } => "project-has-own-workspace".yellow().to_string(),
             ViolationKind::ProfileImplPathNotFound { .. } => "profile-impl-not-found".red().to_string(),
             ViolationKind::ProfileImplNotAComponent { .. } => "profile-impl-not-component".red().to_string(),
             ViolationKind::HardwiredDep { .. } => "hardwired-dep".yellow().to_string(),

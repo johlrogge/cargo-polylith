@@ -66,6 +66,9 @@ pub enum ViolationKind {
     ProjectNotInRootWorkspace {
         project: String,
     },
+    /// A project's Cargo.toml has its own `[workspace]` section — it must be a plain
+    /// bin crate in the root workspace instead.
+    ProjectHasOwnWorkspace { project: String },
     /// A profile's implementation path does not exist under the workspace root.
     ProfileImplPathNotFound {
         profile: String,
@@ -191,6 +194,21 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
                 message: format!(
                     "project '{}' has no base dependency — deliverable projects must include at least one base; set `[package.metadata.polylith] test-project = true` to suppress for test/dev projects",
                     project.name
+                ),
+            });
+        }
+    }
+
+    // --- project has own workspace checks ---
+    for project in &map.projects {
+        if project.has_own_workspace {
+            violations.push(Violation {
+                kind: ViolationKind::ProjectHasOwnWorkspace { project: project.name.clone() },
+                message: format!(
+                    "project '{}' has its own [workspace] section — remove it from {}/Cargo.toml \
+                     and add the project to the root workspace members",
+                    project.name,
+                    project.path.strip_prefix(&map.root).unwrap_or(&project.path).display()
                 ),
             });
         }
@@ -471,6 +489,7 @@ pub fn is_warning_kind(k: &ViolationKind) -> bool {
         ViolationKind::ProjectFeatureDrift { .. } => true,
         ViolationKind::ProjectVersionDrift { .. } => true,
         ViolationKind::ProjectNotInRootWorkspace { .. } => true,
+        ViolationKind::ProjectHasOwnWorkspace { .. } => true,
         ViolationKind::MissingLibRs => false,
         ViolationKind::MissingImplFile => false,
         ViolationKind::BaseMissingLibRs => false,

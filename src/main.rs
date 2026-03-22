@@ -32,12 +32,18 @@ fn main() {
             use cli::BaseAction;
             match action {
                 BaseAction::New { name } => commands::base::new(&name, workspace_root),
+                BaseAction::Update { name, test_base } => {
+                    commands::base::update(&name, test_base, workspace_root)
+                }
             }
         }
         PolylithCommand::Project { action } => {
             use cli::ProjectAction;
             match action {
                 ProjectAction::New { name } => commands::project::new(&name, workspace_root),
+                ProjectAction::SetImpl { project, interface, implementation } => {
+                    commands::project::set_impl(&project, &interface, &implementation, workspace_root)
+                }
             }
         }
         PolylithCommand::Deps { component, json } => {
@@ -64,6 +70,7 @@ fn main() {
         PolylithCommand::Profile { action } => {
             use cli::ProfileAction;
             match action {
+                ProfileAction::New { name } => commands::profile::new(&name, workspace_root),
                 ProfileAction::List { json } => commands::profile::list(json, workspace_root),
                 ProfileAction::Build { name, no_build } => {
                     commands::profile::build(&name, no_build, workspace_root)
