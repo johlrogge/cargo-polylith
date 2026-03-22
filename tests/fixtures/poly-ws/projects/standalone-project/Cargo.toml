@@ -1,0 +1,14 @@
+[package]
+name = "standalone-project"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "standalone-project"
+path = "src/main.rs"
+
+[workspace]
+members = []
+resolver = "2"
+
+[dependencies]
