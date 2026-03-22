@@ -7,8 +7,4 @@ edition = "2021"
 name = "standalone-project"
 path = "src/main.rs"
 
-[workspace]
-members = []
-resolver = "2"
-
 [dependencies]

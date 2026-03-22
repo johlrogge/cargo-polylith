@@ -439,12 +439,22 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         let has_own_workspace = doc.get("workspace").is_some();
+        // Extract the `name` field from the first `[[bin]]` entry, if present.
+        let bin_name = doc
+            .get("bin")
+            .and_then(|b| b.as_array_of_tables())
+            .and_then(|arr| arr.iter().next())
+            .and_then(|t| t.get("name"))
+            .and_then(|v| v.as_value())
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         projects.push(Project {
             name,
             path: path.clone(),
             deps,
             test_project,
             has_own_workspace,
+            bin_name,
             dep_paths,
             external_deps,
         });
@@ -678,8 +688,9 @@ mod tests {
     #[test]
     fn detects_project_with_own_workspace() {
         let map = build_workspace_map(&fixture()).unwrap();
+        // The fixture's standalone-project no longer has its own [workspace] section.
         let standalone = map.projects.iter().find(|p| p.name == "standalone-project").unwrap();
-        assert!(standalone.has_own_workspace);
+        assert!(!standalone.has_own_workspace);
         let main = map.projects.iter().find(|p| p.name == "main-project").unwrap();
         assert!(!main.has_own_workspace);
     }

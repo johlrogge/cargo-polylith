@@ -287,18 +287,10 @@ impl App {
             "project name must contain only alphanumeric characters, hyphens, or underscores"
         );
 
+        crate::scaffold::create_project(&self.workspace_root, &name)
+            .with_context(|| format!("creating project '{name}'"))?;
+
         let project_dir = self.workspace_root.join("projects").join(&name);
-        fs::create_dir_all(project_dir.join("src"))
-            .with_context(|| format!("creating {}", project_dir.display()))?;
-
-        let cargo_toml = format!(
-            "[workspace]\nresolver = \"2\"\nmembers = []\n\n[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[[bin]]\nname = \"{name}\"\npath = \"src/main.rs\"\n\n[dependencies]\n"
-        );
-        fs::write(project_dir.join("Cargo.toml"), &cargo_toml)
-            .with_context(|| format!("writing Cargo.toml for {name}"))?;
-        fs::write(project_dir.join("src/main.rs"), "fn main() {}\n")
-            .with_context(|| format!("writing src/main.rs for {name}"))?;
-
         let new_col = GridCol { name: name.clone(), path: project_dir };
         for row_cells in &mut self.cells {
             row_cells.push(DepState::None);

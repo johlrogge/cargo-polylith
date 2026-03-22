@@ -4,5 +4,6 @@ members = [
     "components/parser",
     "bases/cli",
     "projects/main-project",
+    "projects/standalone-project",
 ]
 resolver = "2"

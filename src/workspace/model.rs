@@ -54,6 +54,8 @@ pub struct Project {
     /// True when this project's Cargo.toml contains its own `[workspace]` section.
     /// Projects must be plain bin crates in the root workspace, not sub-workspaces.
     pub has_own_workspace: bool,
+    /// The `name` field from the first `[[bin]]` entry in the project's Cargo.toml, if any.
+    pub bin_name: Option<String>,
     /// Raw path dependencies: (dep_key, resolved_absolute_path). Used to validate
     /// that dep keys match the target package name. Only populated for deps that
     /// have a `path = "..."` value and no `package = "..."` alias.
