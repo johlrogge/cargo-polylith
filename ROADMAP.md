@@ -2,7 +2,7 @@
 
 ## Shipped
 
-### 0.7.1 — Profile BFS transitive closure, `cargo polylith cargo` ✅
+### 0.8.0 — Profile BFS transitive closure, `cargo polylith cargo` ✅
 
 - `resolve_profile_workspace` now uses BFS transitive closure — only bricks transitively needed by the profile's selected implementations are included in the generated workspace. Alternative implementations of the same interface are excluded, enabling correct component-to-component swapping (e.g. a component that depends on `fact-store = { workspace = true }` — the profile controls which implementation `fact-store` resolves to).
 - `cargo polylith cargo --profile <name> <subcommand...>` — generates the profile workspace and delegates to cargo with `--manifest-path`. Accepts any cargo subcommand and trailing flags:
