@@ -82,23 +82,6 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
         return Ok(());
     }
 
-    // Read root Cargo.toml to check current members using cargo_toml for reliability
-    let manifest_path = root.join("Cargo.toml");
-    let manifest = cargo_toml::Manifest::from_path(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-
-    // Also check if members is already empty (legacy already-migrated state)
-    let members_empty = manifest
-        .workspace
-        .as_ref()
-        .map(|ws| ws.members.is_empty())
-        .unwrap_or(true);
-
-    if members_empty && !polylith_toml_path.exists() {
-        eprintln!("workspace already migrated — root members is already empty");
-        return Ok(());
-    }
-
     // Check if profiles/dev.profile already exists
     let dev_profile_path = root.join("profiles/dev.profile");
     if dev_profile_path.exists() && !force {
@@ -128,6 +111,13 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
     eprintln!("Created Polylith.toml");
     eprintln!("Removed [workspace] from root Cargo.toml");
 
+    // Strip { workspace = true } from all brick Cargo.tomls
+    let polylith_toml = crate::workspace::read_polylith_toml(&root)?;
+    let stripped_count = crate::scaffold::strip_workspace_inheritance(&root, &polylith_toml)?;
+    if stripped_count > 0 {
+        eprintln!("Stripped workspace inheritance from {} brick(s)", stripped_count);
+    }
+
     // Re-read workspace map now that Polylith.toml exists — it will populate workspace_package
     let map = build_workspace_map(&root)?;
 
@@ -145,6 +135,13 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
     println!();
     println!("Migration complete.");
     println!();
+    if stripped_count > 0 {
+        println!(
+            "  Stripped workspace inheritance from {} brick(s) (explicit versions from Polylith.toml).",
+            stripped_count
+        );
+        println!();
+    }
     if impl_pairs.is_empty() {
         println!("  No interface deps found in [workspace.dependencies].");
     } else {

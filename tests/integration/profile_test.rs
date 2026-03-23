@@ -366,10 +366,14 @@ fn profile_migrate_already_migrated() {
 
     let tmp = TempDir::new().unwrap();
 
-    // Root workspace with already-empty members
+    // A Polylith.toml already present — canonical marker for "already migrated"
+    fs::write(
+        tmp.path().join("Polylith.toml"),
+        "[workspace]\nschema_version = 1\n",
+    ).unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+        "# polylith workspace — see Polylith.toml\n",
     ).unwrap();
 
     cargo_polylith()
@@ -630,4 +634,96 @@ fn find_workspace_root_finds_polylith_toml() {
         ])
         .assert()
         .success();
+}
+
+#[test]
+fn profile_migrate_strips_workspace_inheritance() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+
+    // Root workspace with [workspace.package] and [workspace.dependencies]
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        r#"[workspace]
+members = ["components/logger"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+logger = { path = "components/logger" }
+serde = { version = "1", features = ["derive"] }
+"#,
+    ).unwrap();
+
+    // Create a minimal component that uses workspace inheritance
+    let comp_dir = tmp.path().join("components/logger/src");
+    fs::create_dir_all(&comp_dir).unwrap();
+    fs::write(
+        tmp.path().join("components/logger/Cargo.toml"),
+        r#"[package]
+name = "logger"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+"#,
+    ).unwrap();
+    fs::write(comp_dir.join("lib.rs"), "pub fn log() {}\n").unwrap();
+
+    // Run migrate
+    let output = cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "profile",
+            "migrate",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = std::str::from_utf8(&output.stderr).unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+
+    assert!(
+        output.status.success(),
+        "migrate should succeed.\nstderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+
+    // Check that the component Cargo.toml has been rewritten
+    let comp_manifest = tmp.path().join("components/logger/Cargo.toml");
+    let comp_content = fs::read_to_string(&comp_manifest).unwrap();
+
+    assert!(
+        comp_content.contains("version = \"0.1.0\""),
+        "component should have explicit version.\ncontent:\n{comp_content}"
+    );
+    assert!(
+        comp_content.contains("edition = \"2021\""),
+        "component should have explicit edition.\ncontent:\n{comp_content}"
+    );
+    assert!(
+        comp_content.contains("version = \"1\"") || comp_content.contains("serde"),
+        "component should have explicit serde dep.\ncontent:\n{comp_content}"
+    );
+    assert!(
+        comp_content.contains("derive"),
+        "component serde dep should include derive feature.\ncontent:\n{comp_content}"
+    );
+    assert!(
+        !comp_content.contains("workspace = true"),
+        "component should not have any workspace = true after migration.\ncontent:\n{comp_content}"
+    );
+
+    // Summary output should mention stripping
+    assert!(
+        stdout.contains("Stripped workspace inheritance") || stderr.contains("Stripped workspace inheritance"),
+        "output should mention stripping.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
 }
