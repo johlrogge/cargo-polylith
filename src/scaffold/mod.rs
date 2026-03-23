@@ -198,7 +198,11 @@ fn relative_path(from_dir: &Path, to_dir: &Path) -> std::path::PathBuf {
 
 /// Write a profile workspace Cargo.toml from pre-resolved profile data.
 ///
-/// Creates `profiles/<name>/Cargo.toml` at the workspace root.
+/// Creates `profiles/<name>/Cargo.toml` at the workspace root, plus symlinks
+/// `profiles/<name>/components`, `profiles/<name>/bases`, and
+/// `profiles/<name>/projects` pointing to the real source directories at the
+/// workspace root (only when those directories exist).
+///
 /// Returns the path to the generated file.
 pub fn write_profile_workspace(
     root: &Path,
@@ -207,6 +211,33 @@ pub fn write_profile_workspace(
     let profile_dir = root.join("profiles").join(&resolved.profile_name);
     fs::create_dir_all(&profile_dir)
         .with_context(|| format!("creating {}", profile_dir.display()))?;
+
+    // Create symlinks for each top-level brick directory that exists at root.
+    // The symlink target is relative (../../<dir>) so it works regardless of
+    // where the workspace is checked out.
+    for dir_name in &["components", "bases", "projects"] {
+        let src = root.join(dir_name);
+        if src.exists() {
+            let link = profile_dir.join(dir_name);
+            if link.exists() || link.is_symlink() {
+                // Already present — skip (idempotent).
+            } else {
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(
+                    format!("../../{dir_name}"),
+                    &link,
+                )
+                .with_context(|| format!("creating symlink {}", link.display()))?;
+                #[cfg(not(unix))]
+                {
+                    // On non-Unix platforms symlinks require elevated privileges;
+                    // skip silently and let the user create them manually if needed.
+                    let _ = link;
+                }
+            }
+        }
+    }
+
     let out_path = profile_dir.join("Cargo.toml");
 
     let member_lines = resolved

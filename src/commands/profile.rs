@@ -153,11 +153,20 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
     println!();
     println!("  Polylith.toml written — workspace metadata and library versions moved there.");
     println!("  [workspace] removed from root Cargo.toml.");
+    println!("  Root workspace members cleared (previously managed components/bases/projects");
+    println!("  are now referenced via the generated profile workspace with symlinks).");
     println!();
     println!("New workflow:");
-    println!("  cargo polylith cargo build       # build with dev profile (default)");
-    println!("  cargo polylith cargo test        # test with dev profile");
-    println!("  cargo polylith cargo --profile <name> build  # build with a named profile");
+    println!("  cargo polylith cargo build                    # build with dev profile (default)");
+    println!("  cargo polylith cargo test                     # test with dev profile");
+    println!("  cargo polylith cargo --profile <name> build   # build with a named profile");
+    println!();
+    println!("  Alternatively, navigate directly into the profile workspace:");
+    println!("    cd profiles/dev && cargo build");
+    println!();
+    println!("  Note: bricks use `{{ workspace = true }}` deps which resolve via the profile");
+    println!("  workspace's [workspace.dependencies]. Running cargo from the root is no");
+    println!("  longer supported — always use the profile workspace.");
 
     Ok(())
 }

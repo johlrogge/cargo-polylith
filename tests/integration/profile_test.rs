@@ -200,8 +200,17 @@ fn profile_build_no_build_generates_cargo_toml() {
 
     let content = fs::read_to_string(&generated).unwrap();
     assert!(content.contains("[workspace]"), "should have [workspace] section");
-    assert!(content.contains("../../components/logger"), "should have logger member");
-    assert!(content.contains("../../components/parser"), "should have parser member");
+    assert!(content.contains("\"components/logger\""), "should have logger member with symlink-relative path");
+    assert!(content.contains("\"components/parser\""), "should have parser member with symlink-relative path");
+    assert!(!content.contains("../../"), "should not contain ../../ paths — symlinks make them unnecessary");
+
+    // Verify symlinks were created
+    let components_link = tmp.path().join("profiles/dev/components");
+    assert!(components_link.is_symlink(), "profiles/dev/components should be a symlink");
+    let bases_link = tmp.path().join("profiles/dev/bases");
+    assert!(bases_link.is_symlink(), "profiles/dev/bases should be a symlink");
+    let projects_link = tmp.path().join("profiles/dev/projects");
+    assert!(projects_link.is_symlink(), "profiles/dev/projects should be a symlink");
 }
 
 #[test]
@@ -592,6 +601,69 @@ serde = { version = "1", features = ["derive"] }
 }
 
 #[test]
+fn profile_workspace_has_symlinks() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    let fixture = fixture_root();
+
+    let copy_file = |rel: &str| {
+        let src = fixture.join(rel);
+        let dst = tmp.path().join(rel);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        if src.exists() {
+            fs::copy(&src, &dst).unwrap();
+        }
+    };
+
+    copy_file("Cargo.toml");
+    copy_file("components/logger/Cargo.toml");
+    copy_file("components/logger/src/lib.rs");
+    copy_file("components/logger/src/logger.rs");
+    copy_file("components/parser/Cargo.toml");
+    copy_file("components/parser/src/lib.rs");
+    copy_file("components/parser/src/parser.rs");
+    copy_file("bases/cli/Cargo.toml");
+    copy_file("bases/cli/src/lib.rs");
+    copy_file("projects/main-project/Cargo.toml");
+    copy_file("projects/main-project/src/main.rs");
+    copy_file("profiles/dev.profile");
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "profile",
+            "build",
+            "dev",
+            "--no-build",
+        ])
+        .assert()
+        .success();
+
+    // profiles/dev/components, bases, projects must all be symlinks
+    let components_link = tmp.path().join("profiles/dev/components");
+    assert!(
+        components_link.is_symlink(),
+        "profiles/dev/components should be a symlink after profile build"
+    );
+    let bases_link = tmp.path().join("profiles/dev/bases");
+    assert!(
+        bases_link.is_symlink(),
+        "profiles/dev/bases should be a symlink after profile build"
+    );
+    let projects_link = tmp.path().join("profiles/dev/projects");
+    assert!(
+        projects_link.is_symlink(),
+        "profiles/dev/projects should be a symlink after profile build"
+    );
+}
+
+#[test]
 fn find_workspace_root_finds_polylith_toml() {
     use tempfile::TempDir;
     use std::fs;
@@ -834,5 +906,71 @@ serde = { workspace = true }
     assert!(
         parser_content.contains("../logger"),
         "parser's logger dep should use relative path '../logger'.\ncontent:\n{parser_content}"
+    );
+}
+
+#[test]
+fn profile_workspace_member_paths_are_relative_to_profile_root() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    let fixture = fixture_root();
+
+    let copy_file = |rel: &str| {
+        let src = fixture.join(rel);
+        let dst = tmp.path().join(rel);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        if src.exists() {
+            fs::copy(&src, &dst).unwrap();
+        }
+    };
+
+    copy_file("Cargo.toml");
+    copy_file("components/logger/Cargo.toml");
+    copy_file("components/logger/src/lib.rs");
+    copy_file("components/logger/src/logger.rs");
+    copy_file("components/parser/Cargo.toml");
+    copy_file("components/parser/src/lib.rs");
+    copy_file("components/parser/src/parser.rs");
+    copy_file("bases/cli/Cargo.toml");
+    copy_file("bases/cli/src/lib.rs");
+    copy_file("projects/main-project/Cargo.toml");
+    copy_file("projects/main-project/src/main.rs");
+    copy_file("profiles/dev.profile");
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "profile",
+            "build",
+            "dev",
+            "--no-build",
+        ])
+        .assert()
+        .success();
+
+    let generated = tmp.path().join("profiles/dev/Cargo.toml");
+    let content = fs::read_to_string(&generated).unwrap();
+
+    // Member paths must NOT start with ../../ — they are relative to the profile
+    // workspace root and resolved via symlinks.
+    assert!(
+        !content.contains("../../"),
+        "generated Cargo.toml must not contain ../../ paths — use symlink-relative paths instead.\ncontent:\n{content}"
+    );
+
+    // Member paths should use the symlink-relative form
+    assert!(
+        content.contains("\"components/"),
+        "member paths should start with components/ not ../../components/.\ncontent:\n{content}"
+    );
+    assert!(
+        content.contains("\"bases/"),
+        "member paths should start with bases/ not ../../bases/.\ncontent:\n{content}"
     );
 }

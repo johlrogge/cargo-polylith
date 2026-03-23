@@ -633,19 +633,15 @@ pub fn resolve_profile_workspace(
     use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
     use super::model::ResolvedProfileWorkspace;
 
-    // Profile dir location (two levels below root): profiles/<name>/
-    let profile_dir = root.join("profiles").join(&profile.name);
-
-    // Helper: compute path relative to profile_dir, as a forward-slash string
+    // Helper: compute path relative to root, as a forward-slash string.
+    // With Option D profile workspaces, components/bases/projects are accessed via
+    // symlinks inside the profile dir, so member paths are just the root-relative path
+    // (e.g. "components/foo", "bases/bar") rather than "../../components/foo".
     let rel_str = |abs: &Path| -> String {
-        let from: Vec<_> = profile_dir.components().collect();
-        let to: Vec<_> = abs.components().collect();
-        let common = from.iter().zip(to.iter()).take_while(|(a, b)| a == b).count();
-        let up = from.len() - common;
-        let mut rel = std::path::PathBuf::new();
-        for _ in 0..up { rel.push(".."); }
-        for part in &to[common..] { rel.push(part); }
-        rel.to_string_lossy().replace('\\', "/")
+        abs.strip_prefix(root)
+            .unwrap_or(abs)
+            .to_string_lossy()
+            .replace('\\', "/")
     };
 
     // Build lookup maps from map.components
