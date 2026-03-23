@@ -19,17 +19,17 @@ path = "src/main.rs"
 clap = { version = "4.5", features = ["derive"] }
 
 # TOML parsing — cargo_toml gives a typed Cargo.toml model for free
-cargo_toml = "0.20"
+cargo_toml = "0.22"
 
 # TOML editing — preserves comments and formatting when writing back
-toml_edit = "0.22"
+toml_edit = "0.25"
 
 # Error handling
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 
 # Terminal output
-colored = "2.0"
+colored = "3.0"
 
 # Filesystem traversal
 walkdir = "2.5"
@@ -39,8 +39,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # TUI (edit command)
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 
 [[test]]
 name = "init_test"
@@ -75,4 +75,4 @@ tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.0"
 serde_json = "1.0"
-toml_edit = "0.22"
+toml_edit = "0.25"
