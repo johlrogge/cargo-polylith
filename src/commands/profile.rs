@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use crate::commands::validate::validate_brick_name;
 use crate::output::table;
 use crate::workspace::{build_workspace_map, discover_profiles, resolve_profile_workspace, resolve_root};
-use std::fs;
 
 pub fn list(json: bool, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -174,10 +173,15 @@ pub fn run_cargo(profile_name: &str, cargo_args: &[String], workspace_root: Opti
     let generated = crate::scaffold::write_profile_workspace(&root, &resolved)?;
     eprintln!("Generated {}", generated.display());
 
+    // Place --manifest-path after the subcommand name so cargo sees it as a
+    // per-subcommand option (not a global flag), and before the remaining args
+    // so that `--` in user args is not misinterpreted.
+    let (subcommand, rest) = cargo_args.split_first().map(|(s, r)| (s.as_str(), r)).unwrap_or(("", &[]));
     let status = std::process::Command::new("cargo")
+        .arg(subcommand)
         .arg("--manifest-path")
         .arg(&generated)
-        .args(cargo_args)
+        .args(rest)
         .status()
         .context("failed to invoke cargo")?;
 
