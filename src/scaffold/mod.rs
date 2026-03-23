@@ -322,21 +322,30 @@ pub fn create_dev_profile_from_deps(root: &Path, impls: &[(String, String)]) -> 
 }
 
 /// Read root `Cargo.toml` with `toml_edit`, set `[workspace].members` to an empty array,
-/// and write back. Preserves all other content (including `[workspace.dependencies]`).
+/// add `exclude` patterns for polylith directories so Cargo does not claim bricks as root
+/// workspace members (required for profile workspaces to claim them), and write back.
+/// Preserves all other content (including `[workspace.dependencies]`).
 pub fn clear_root_members(root: &Path) -> Result<()> {
     let manifest_path = root.join("Cargo.toml");
     let content = fs::read_to_string(&manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
     let mut doc: DocumentMut = content.parse().context("parsing root Cargo.toml")?;
 
-    // Clear by removing all entries from the existing array to preserve formatting,
-    // falling back to replacing with a fresh empty array.
+    // Clear members in place to preserve formatting.
     if let Some(members) = doc["workspace"]["members"].as_array_mut() {
-        // Clear all entries in place, preserving the array's position and formatting
         members.clear();
     } else {
         doc["workspace"]["members"] = toml_edit::array();
     }
+
+    // Add exclude patterns so the root workspace does not claim bricks even though
+    // they live under the workspace root directory. Without this, Cargo refuses to
+    // let profile workspaces claim them as members.
+    let mut exclude = toml_edit::Array::new();
+    for pattern in &["components/*", "bases/*", "projects/*", "profiles/*"] {
+        exclude.push(*pattern);
+    }
+    doc["workspace"]["exclude"] = toml_edit::value(exclude);
 
     fs::write(&manifest_path, doc.to_string())
         .with_context(|| format!("writing {}", manifest_path.display()))?;
