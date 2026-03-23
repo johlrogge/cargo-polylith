@@ -78,10 +78,12 @@ fn main() {
                 ProfileAction::Add { interface, r#impl, profile } => {
                     commands::profile::add(&interface, &r#impl, &profile, workspace_root)
                 }
+                ProfileAction::Migrate { force } => commands::profile::migrate(force, workspace_root),
             }
         }
         PolylithCommand::Cargo { profile, args: cargo_args } => {
-            commands::profile::run_cargo(&profile, &cargo_args, workspace_root)
+            let profile_name = profile.as_deref().unwrap_or("dev");
+            commands::profile::run_cargo(profile_name, &cargo_args, workspace_root)
         }
     };
 

@@ -299,6 +299,51 @@ pub fn add_profile_impl(
     Ok(())
 }
 
+/// Create `profiles/dev.profile` with an `[implementations]` section populated
+/// from the given `(interface_key, path_string)` pairs.
+/// Creates the `profiles/` directory if it doesn't exist.
+pub fn create_dev_profile_from_deps(root: &Path, impls: &[(String, String)]) -> Result<()> {
+    let profiles_dir = root.join("profiles");
+    fs::create_dir_all(&profiles_dir)
+        .with_context(|| format!("creating {}", profiles_dir.display()))?;
+
+    let profile_path = profiles_dir.join("dev.profile");
+
+    let mut doc = toml_edit::DocumentMut::new();
+    doc["implementations"] = toml_edit::table();
+    for (key, path) in impls {
+        doc["implementations"][key] = toml_edit::value(path.as_str());
+    }
+
+    fs::write(&profile_path, doc.to_string())
+        .with_context(|| format!("writing {}", profile_path.display()))?;
+
+    Ok(())
+}
+
+/// Read root `Cargo.toml` with `toml_edit`, set `[workspace].members` to an empty array,
+/// and write back. Preserves all other content (including `[workspace.dependencies]`).
+pub fn clear_root_members(root: &Path) -> Result<()> {
+    let manifest_path = root.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let mut doc: DocumentMut = content.parse().context("parsing root Cargo.toml")?;
+
+    // Clear by removing all entries from the existing array to preserve formatting,
+    // falling back to replacing with a fresh empty array.
+    if let Some(members) = doc["workspace"]["members"].as_array_mut() {
+        // Clear all entries in place, preserving the array's position and formatting
+        members.clear();
+    } else {
+        doc["workspace"]["members"] = toml_edit::array();
+    }
+
+    fs::write(&manifest_path, doc.to_string())
+        .with_context(|| format!("writing {}", manifest_path.display()))?;
+
+    Ok(())
+}
+
 /// Append a member path to the root workspace `Cargo.toml` `[workspace].members` array
 /// using `toml_edit` to preserve existing comments and formatting.
 fn add_workspace_member(root: &Path, member: &str) -> Result<()> {
