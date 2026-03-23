@@ -146,19 +146,6 @@ fn tools_list(id: Value, write: bool) -> Value {
                 }
             }),
             json!({
-                "name": "polylith_set_implementation",
-                "description": "Select which component implementation to use for an interface in a project, by writing a [dependencies] entry with path (and package = if the crate name differs from the interface name)",
-                "inputSchema": {
-                    "type": "object",
-                    "required": ["project", "interface", "implementation"],
-                    "properties": {
-                        "project": { "type": "string", "description": "Project name" },
-                        "interface": { "type": "string", "description": "Interface (crate name) to patch" },
-                        "implementation": { "type": "string", "description": "Component name providing the implementation" }
-                    }
-                }
-            }),
-            json!({
                 "name": "polylith_profile_new",
                 "description": "Create a new empty profile file at profiles/<name>.profile",
                 "inputSchema": {
@@ -345,7 +332,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
 
         // ── write tools ─────────────────────────────────────────────────────
         "polylith_component_new" | "polylith_base_new" | "polylith_project_new"
-        | "polylith_component_update" | "polylith_set_implementation"
+        | "polylith_component_update"
         | "polylith_profile_new" | "polylith_profile_add" | "polylith_base_update"
             if !write =>
         {
@@ -394,31 +381,6 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                             }
                         }
                         None => format!("component '{comp_name}' not found in workspace"),
-                    }
-                }
-                Err(e) => format!("error: {e:#}"),
-            }
-        }
-
-        "polylith_set_implementation" => {
-            let project_name = arguments["project"].as_str().unwrap_or("");
-            let interface = arguments["interface"].as_str().unwrap_or("");
-            let impl_name = arguments["implementation"].as_str().unwrap_or("");
-            match build_workspace_map(root) {
-                Ok(map) => {
-                    let project = map.projects.iter().find(|p| p.name == project_name);
-                    let component = map.components.iter().find(|c| c.name == impl_name);
-                    match (project, component) {
-                        (Some(proj), Some(comp)) => {
-                            match scaffold::set_project_implementation(&proj.path, interface, &comp.path) {
-                                Ok(()) => format!(
-                                    "set implementation of '{interface}' to '{impl_name}' in project '{project_name}'"
-                                ),
-                                Err(e) => format!("error: {e:#}"),
-                            }
-                        }
-                        (None, _) => format!("project '{project_name}' not found"),
-                        (_, None) => format!("component '{impl_name}' not found"),
                     }
                 }
                 Err(e) => format!("error: {e:#}"),

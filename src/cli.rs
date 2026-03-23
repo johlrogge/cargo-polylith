@@ -201,14 +201,4 @@ pub enum ProjectAction {
         /// Name of the project
         name: String,
     },
-    /// Select which component implementation to use for an interface in a project
-    SetImpl {
-        /// Project name
-        project: String,
-        /// Interface name (the dep key)
-        interface: String,
-        /// Component name providing the implementation
-        #[arg(long)]
-        implementation: String,
-    },
 }
