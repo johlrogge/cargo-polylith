@@ -136,6 +136,7 @@ cargo polylith check
 # 8. Work with profiles (optional — for named implementation sets)
 cargo polylith profile add http-client --impl components/http-client-real --profile production
 cargo polylith profile list
+cargo polylith cargo build                         # uses dev profile by default
 cargo polylith cargo --profile production build
 ```
 
@@ -436,16 +437,50 @@ cargo polylith profile add http-client \
 
 Creates `profiles/<name>.profile` if it does not exist.
 
+#### `cargo polylith profile migrate [--force]`
+
+Migrates a workspace from the traditional "bricks in root workspace members" layout
+to the profiles-based model.
+
+```
+cargo polylith profile migrate
+cargo polylith profile migrate --force
+```
+
+What it does:
+
+1. Reads `[workspace.dependencies]` interface path deps from the root `Cargo.toml`
+2. Writes `profiles/dev.profile` with those selections under `[implementations]`
+3. Generates `profiles/dev/Cargo.toml` — the dev profile workspace
+4. Clears root `[workspace] members` to `[]`
+
+If the workspace is already migrated (members already empty), exits cleanly with a
+message and makes no changes. `--force` overwrites an existing `profiles/dev.profile`.
+
+After migration, use `cargo polylith cargo` (which defaults to the dev profile) in
+place of direct `cargo` invocations:
+
+```
+cargo polylith cargo check
+cargo polylith cargo build
+cargo polylith cargo test
+```
+
 ---
 
-### `cargo polylith cargo --profile <name> <subcommand...>`
+### `cargo polylith cargo [--profile <name>] <subcommand...>`
 
 Generates the profile workspace and delegates to cargo with `--manifest-path`.
 Accepts any cargo subcommand and trailing flags.
 
+`--profile` defaults to `dev` when omitted. If no dev profile exists, the command
+prints `no dev profile found — run 'cargo polylith profile migrate' to set one up`.
+
 ```
+cargo polylith cargo check                          # uses dev profile by default
+cargo polylith cargo build
+cargo polylith cargo test
 cargo polylith cargo --profile production build
-cargo polylith cargo --profile dev test
 cargo polylith cargo --profile production clippy -- -D warnings
 ```
 
