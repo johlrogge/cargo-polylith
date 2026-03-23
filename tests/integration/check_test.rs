@@ -993,3 +993,49 @@ fn check_project_with_own_workspace_is_error() {
         .stdout(predicate::str::contains("bad-project")
             .and(predicate::str::contains("[workspace]")));
 }
+
+// ── profile-selected component is not an orphan ────────────────────────────────
+
+#[test]
+fn check_profile_impl_not_orphan() {
+    // A component with no base/project dep that IS selected by a profile must NOT
+    // be flagged as an orphan component.
+    let tmp = init_valid_workspace();
+
+    // Component with no direct deps from bases or projects
+    let comp = tmp.path().join("components/fact_store_file");
+    fs::create_dir_all(comp.join("src")).unwrap();
+    fs::write(
+        comp.join("Cargo.toml"),
+        "[package]\nname = \"fact_store_file\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [package.metadata.polylith]\ninterface = \"fact-store\"\n",
+    ).unwrap();
+    fs::write(comp.join("src/lib.rs"), "pub struct FactStoreFile;\n").unwrap();
+
+    // Profile that selects this component as the implementation of "fact-store"
+    fs::create_dir(tmp.path().join("profiles")).unwrap();
+    fs::write(
+        tmp.path().join("profiles/production.profile"),
+        "[implementations]\nfact-store = \"components/fact_store_file\"\n",
+    ).unwrap();
+
+    let out = cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let text = std::str::from_utf8(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).expect("not valid JSON");
+    let violations = parsed["violations"].as_array().unwrap();
+
+    // No orphan violation for fact_store_file
+    let has_orphan = violations.iter().any(|v| {
+        let is_orphan_kind = v["kind"].as_str().map(|s| s == "orphan_component").unwrap_or(false);
+        let mentions_comp = v["message"].as_str().map(|s| s.contains("fact_store_file")).unwrap_or(false);
+        is_orphan_kind && mentions_comp
+    });
+    assert!(!has_orphan, "fact_store_file should not be flagged as orphan when selected by a profile, got: {violations:?}");
+}

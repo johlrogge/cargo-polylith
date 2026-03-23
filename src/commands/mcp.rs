@@ -298,7 +298,8 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
 
         "polylith_check" => match build_workspace_map(root) {
             Ok(map) => {
-                let violations = run_checks(&map);
+                let profiles = discover_profiles(root).unwrap_or_default();
+                let violations = run_checks(&map, &profiles);
                 serde_json::to_string_pretty(&json!({ "violations": violations }))
                     .unwrap_or_else(|e| e.to_string())
             }

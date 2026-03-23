@@ -90,7 +90,11 @@ pub enum ViolationKind {
 }
 
 /// Run all structural checks against `map` and return any violations found.
-pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
+///
+/// `profiles` is used to seed the orphan-component check: any component selected
+/// by a profile is considered "depended on" and will not be flagged as an orphan.
+/// Pass an empty slice if no profiles are available.
+pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec<Violation> {
     let mut violations = vec![];
 
     let base_names: std::collections::HashSet<&str> =
@@ -127,6 +131,33 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
             p.deps.iter().flat_map(|dep_name| resolve_dep(dep_name))
         }))
         .collect();
+    while let Some(name) = queue.pop_front() {
+        if depended_on.insert(name) {
+            if let Some(deps) = comp_deps.get(name) {
+                for d in *deps {
+                    for resolved in resolve_dep(d) {
+                        queue.push_back(resolved);
+                    }
+                }
+            }
+        }
+    }
+
+    // Seed depended_on from profile implementations: any component selected by a
+    // profile is considered used, even if no base or project directly depends on it.
+    for profile in profiles {
+        for impl_path in profile.implementations.values() {
+            let abs = map.root.join(impl_path);
+            let abs_canon = abs.canonicalize().unwrap_or(abs);
+            if let Some(comp) = map.components.iter().find(|c| {
+                c.path.canonicalize().unwrap_or_else(|_| c.path.clone()) == abs_canon
+            }) {
+                queue.push_back(comp.name.as_str());
+            }
+        }
+    }
+    // Run BFS again for any components added via profile selections (they may
+    // themselves depend on other components).
     while let Some(name) = queue.pop_front() {
         if depended_on.insert(name) {
             if let Some(deps) = comp_deps.get(name) {
@@ -180,7 +211,7 @@ pub fn run_checks(map: &WorkspaceMap) -> Vec<Violation> {
         if !depended_on.contains(comp.name.as_str()) {
             violations.push(Violation {
                 kind: ViolationKind::OrphanComponent,
-                message: format!("component '{}' is not used by any base or project", comp.name),
+                message: format!("component '{}' is not used by any base, project, or profile", comp.name),
             });
         }
     }
