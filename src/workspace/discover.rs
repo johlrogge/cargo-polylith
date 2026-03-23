@@ -513,7 +513,7 @@ pub fn resolve_profile_workspace(
     profile: &super::model::Profile,
     map: &super::model::WorkspaceMap,
 ) -> super::model::ResolvedProfileWorkspace {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
     use super::model::ResolvedProfileWorkspace;
 
     // Profile dir location (two levels below root): profiles/<name>/
@@ -531,10 +531,116 @@ pub fn resolve_profile_workspace(
         rel.to_string_lossy().replace('\\', "/")
     };
 
-    // Members: all components + bases + projects
+    // Build lookup maps from map.components
+    // name_to_brick: package name -> Brick
+    let name_to_brick: HashMap<&str, &super::model::Brick> = map
+        .components
+        .iter()
+        .map(|b| (b.name.as_str(), b))
+        .collect();
+
+    // Build selected_impls: interface_key -> package_name (selected implementation)
+    // Start with root_workspace_interface_deps (defaults), then override with profile.implementations
+    let mut selected_impls: HashMap<String, String> = HashMap::new();
+
+    // Add defaults from root_workspace_interface_deps
+    for (iface_key, path_dep) in &map.root_workspace_interface_deps {
+        // Resolve the path to a brick's package name
+        let rel_path = path_dep.path.replace('\\', "/");
+        if let Some(brick) = map.components.iter().find(|c| {
+            c.path.strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                == Ok(rel_path.clone())
+        }) {
+            selected_impls.insert(iface_key.clone(), brick.name.clone());
+        } else if let Some(pkg) = &path_dep.package {
+            selected_impls.insert(iface_key.clone(), pkg.clone());
+        }
+    }
+
+    // Override with profile.implementations
+    for (iface_key, impl_rel_path) in &profile.implementations {
+        let impl_rel = impl_rel_path.replace('\\', "/");
+        if let Some(brick) = map.components.iter().find(|c| {
+            c.path.strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                == Ok(impl_rel.clone())
+        }) {
+            selected_impls.insert(iface_key.clone(), brick.name.clone());
+        }
+    }
+
+    // Define a helper closure resolve_dep_key(dep_key) -> Option<package_name>
+    // Returns the selected package name for a dep key, or None if it's not a component.
+    let resolve_dep_key = |dep_key: &str| -> Option<String> {
+        // If dep_key is directly in selected_impls (interface key) -> return selected package name
+        if let Some(pkg) = selected_impls.get(dep_key) {
+            return Some(pkg.clone());
+        }
+        // If dep_key matches any brick's interface field -> look up selected_impls by that interface
+        if let Some(brick) = map.components.iter().find(|c| {
+            c.interface.as_deref() == Some(dep_key)
+        }) {
+            let iface = brick.interface.as_deref().unwrap_or(dep_key);
+            if let Some(pkg) = selected_impls.get(iface) {
+                return Some(pkg.clone());
+            }
+        }
+        // If dep_key matches a component package name directly -> return it
+        if name_to_brick.contains_key(dep_key) {
+            return Some(dep_key.to_string());
+        }
+        // Otherwise -> None (external dep or base, skip)
+        None
+    };
+
+    // BFS transitive closure to find all transitively required components
+    let mut included_components: HashSet<String> = HashSet::new();
+    let mut worklist: VecDeque<String> = VecDeque::new();
+
+    // Seed worklist from bases' deps and projects' deps
+    for base in &map.bases {
+        for dep in &base.deps {
+            if let Some(pkg) = resolve_dep_key(dep) {
+                worklist.push_back(pkg);
+            }
+        }
+    }
+    for proj in &map.projects {
+        for dep in &proj.deps {
+            if let Some(pkg) = resolve_dep_key(dep) {
+                worklist.push_back(pkg);
+            }
+        }
+    }
+
+    // BFS
+    while let Some(pkg_name) = worklist.pop_front() {
+        if included_components.contains(&pkg_name) {
+            continue;
+        }
+        included_components.insert(pkg_name.clone());
+        // Look up the brick and recurse into its deps
+        if let Some(brick) = name_to_brick.get(pkg_name.as_str()) {
+            for dep in &brick.deps {
+                if let Some(dep_pkg) = resolve_dep_key(dep) {
+                    if !included_components.contains(&dep_pkg) {
+                        worklist.push_back(dep_pkg);
+                    }
+                }
+            }
+        }
+    }
+
+    // Members: only selected components + all bases + all projects
     let mut members = vec![];
-    for brick in map.components.iter().chain(map.bases.iter()) {
-        members.push(rel_str(&brick.path));
+    for brick in &map.components {
+        if included_components.contains(&brick.name) {
+            members.push(rel_str(&brick.path));
+        }
+    }
+    for base in &map.bases {
+        members.push(rel_str(&base.path));
     }
     for proj in &map.projects {
         members.push(rel_str(&proj.path));
@@ -740,5 +846,99 @@ mod tests {
         ).unwrap();
         let profiles = discover_profiles(dir.path()).unwrap();
         assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn resolve_profile_workspace_excludes_unselected_implementation() {
+        use tempfile::TempDir;
+        use std::fs;
+        use std::collections::HashMap;
+        use super::super::model::{Brick, BrickKind, Profile, Project, WorkspaceMap, WorkspacePathDep};
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        // Create minimal directory structure so rel_str works
+        fs::create_dir_all(root.join("components/store_mem")).unwrap();
+        fs::create_dir_all(root.join("components/store_file")).unwrap();
+        fs::create_dir_all(root.join("bases/app")).unwrap();
+        fs::create_dir_all(root.join("projects/myproject")).unwrap();
+
+        // Two components implementing the same "store" interface
+        let store_mem = Brick {
+            name: "store_mem".to_string(),
+            kind: BrickKind::Component,
+            path: root.join("components/store_mem"),
+            deps: vec![],
+            manifest_path: root.join("components/store_mem/Cargo.toml"),
+            interface: Some("store".to_string()),
+            path_dep_keys: vec![],
+        };
+        let store_file = Brick {
+            name: "store_file".to_string(),
+            kind: BrickKind::Component,
+            path: root.join("components/store_file"),
+            deps: vec![],
+            manifest_path: root.join("components/store_file/Cargo.toml"),
+            interface: Some("store".to_string()),
+            path_dep_keys: vec![],
+        };
+        // One base that depends on "store" (the interface key)
+        let app_base = Brick {
+            name: "app".to_string(),
+            kind: BrickKind::Base,
+            path: root.join("bases/app"),
+            deps: vec!["store".to_string()],
+            manifest_path: root.join("bases/app/Cargo.toml"),
+            interface: None,
+            path_dep_keys: vec![],
+        };
+        // One project
+        let myproject = Project {
+            name: "myproject".to_string(),
+            path: root.join("projects/myproject"),
+            deps: vec![],
+            has_own_workspace: false,
+            bin_name: None,
+            dep_paths: vec![],
+            external_deps: HashMap::new(),
+        };
+
+        // Root workspace interface dep points at store_mem (the default)
+        let mut root_workspace_interface_deps = HashMap::new();
+        root_workspace_interface_deps.insert("store".to_string(), WorkspacePathDep {
+            path: "components/store_mem".to_string(),
+            package: None,
+        });
+
+        let map = WorkspaceMap {
+            root: root.to_path_buf(),
+            components: vec![store_file.clone(), store_mem.clone()],
+            bases: vec![app_base],
+            projects: vec![myproject],
+            root_members: vec![],
+            is_workspace: true,
+            root_workspace_deps: HashMap::new(),
+            root_workspace_interface_deps,
+        };
+
+        // Profile selects store_file for the "store" interface
+        let mut implementations = HashMap::new();
+        implementations.insert("store".to_string(), "components/store_file".to_string());
+        let profile = Profile {
+            name: "test".to_string(),
+            path: root.join("profiles/test.profile"),
+            implementations,
+            libraries: HashMap::new(),
+        };
+
+        let resolved = resolve_profile_workspace(root, &profile, &map);
+
+        // store_file should be included; store_mem should NOT be included
+        let has_store_file = resolved.members.iter().any(|m| m.contains("store_file"));
+        let has_store_mem = resolved.members.iter().any(|m| m.contains("store_mem"));
+
+        assert!(has_store_file, "store_file should be in members: {:?}", resolved.members);
+        assert!(!has_store_mem, "store_mem should NOT be in members: {:?}", resolved.members);
     }
 }
