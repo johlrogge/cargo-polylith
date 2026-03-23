@@ -185,6 +185,15 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
     })
 }
 
+/// Read `Polylith.toml` from the given root directory, returning an error if not present.
+///
+/// Unlike `parse_polylith_toml`, this function requires the file to exist and returns
+/// the `PolylithToml` directly (not wrapped in `Option`).
+pub fn read_polylith_toml(root: &Path) -> Result<PolylithToml> {
+    parse_polylith_toml(root)?
+        .ok_or_else(|| anyhow::anyhow!("Polylith.toml not found at {}", root.display()))
+}
+
 /// Parse `Polylith.toml` from the given root directory, returning `None` if not present.
 fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
     let path = root.join("Polylith.toml");
@@ -283,64 +292,61 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
         if !manifest_path.exists() {
             continue;
         }
-        let manifest = Manifest::from_path(&manifest_path)
+        // Use toml_edit for raw parsing — avoids workspace resolution which fails
+        // when there is no [workspace] in the root (Polylith.toml workspaces).
+        let doc = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("reading {}", manifest_path.display()))?
+            .parse::<toml_edit::DocumentMut>()
             .with_context(|| format!("parsing {}", manifest_path.display()))?;
-        let name = manifest
-            .package
-            .as_ref()
-            .map(|p| p.name.clone())
+        let name = doc
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
             .unwrap_or_else(|| {
                 path.file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned()
             });
-        let deps = manifest
-            .dependencies
-            .keys()
-            .cloned()
-            .collect();
-        let interface = fs::read_to_string(&manifest_path)
-            .ok()
-            .and_then(|s| s.parse::<toml_edit::DocumentMut>().ok())
-            .and_then(|doc| {
-                doc.get("package")
-                    .and_then(|p| p.get("metadata"))
-                    .and_then(|m| m.get("polylith"))
-                    .and_then(|p| p.get("interface"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            });
+        let deps = doc
+            .get("dependencies")
+            .and_then(|d| d.as_table())
+            .map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
+            .unwrap_or_default();
+        let interface = doc
+            .get("package")
+            .and_then(|p| p.get("metadata"))
+            .and_then(|m| m.get("polylith"))
+            .and_then(|p| p.get("interface"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         // Extract dep keys that use direct path deps (not workspace = true)
         let path_dep_keys = {
             let mut keys = vec![];
-            if let Ok(content) = fs::read_to_string(&manifest_path) {
-                if let Ok(doc) = content.parse::<toml_edit::DocumentMut>() {
-                    if let Some(deps_table) = doc.get("dependencies").and_then(|d| d.as_table()) {
-                        for (k, v) in deps_table.iter() {
-                            let has_path = v
-                                .as_value()
-                                .and_then(|v| v.as_inline_table())
-                                .and_then(|it| it.get("path"))
-                                .is_some()
-                                || v.as_table()
-                                    .and_then(|t| t.get("path"))
-                                    .is_some();
-                            let is_workspace = v
-                                .as_value()
-                                .and_then(|v| v.as_inline_table())
-                                .and_then(|it| it.get("workspace"))
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                                || v.as_table()
-                                    .and_then(|t| t.get("workspace"))
-                                    .and_then(|v| v.as_value())
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
-                            if has_path && !is_workspace {
-                                keys.push(k.to_string());
-                            }
-                        }
+            if let Some(deps_table) = doc.get("dependencies").and_then(|d| d.as_table()) {
+                for (k, v) in deps_table.iter() {
+                    let has_path = v
+                        .as_value()
+                        .and_then(|v| v.as_inline_table())
+                        .and_then(|it| it.get("path"))
+                        .is_some()
+                        || v.as_table()
+                            .and_then(|t| t.get("path"))
+                            .is_some();
+                    let is_workspace = v
+                        .as_value()
+                        .and_then(|v| v.as_inline_table())
+                        .and_then(|it| it.get("workspace"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                        || v.as_table()
+                            .and_then(|t| t.get("workspace"))
+                            .and_then(|v| v.as_value())
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                    if has_path && !is_workspace {
+                        keys.push(k.to_string());
                     }
                 }
             }
