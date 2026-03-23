@@ -91,6 +91,15 @@ pub enum PolylithCommand {
         #[command(subcommand)]
         action: ProfileAction,
     },
+    /// Run a cargo command against a generated profile workspace
+    Cargo {
+        /// Profile name to activate
+        #[arg(long, value_name = "NAME", required = true)]
+        profile: String,
+        /// Cargo subcommand and arguments (e.g. build, test, clippy -- -D warnings)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]

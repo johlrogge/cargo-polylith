@@ -6,7 +6,15 @@
 model to Rust/Cargo workspaces. Binary name: `cargo-polylith`. Invoked as
 `cargo polylith <command>`.
 
-See `PLAN.md` for the current implementation plan and `ROADMAP.md` for the long-term vision.
+See `ROADMAP.md` for the long-term vision.
+
+## Environment
+
+This project runs in an immutable Nix environment managed by devenv.
+**Do NOT** run `pip install`, `npm install -g`, `cargo install`, `brew install`,
+`apt-get install`, or any other imperative package manager.
+If a tool or package is missing, add it to `devenv.nix` and re-enter the shell.
+All tools, packages, hooks, and services are declared in `devenv.nix`.
 
 ## Build and Test
 

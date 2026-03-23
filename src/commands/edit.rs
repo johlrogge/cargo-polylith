@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -72,24 +72,58 @@ fn run_loop(
                     KeyCode::Backspace => app.input_backspace(),
                     _ => {}
                 },
-                InputMode::Normal => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => {
-                        app.quit = true;
+                InputMode::Normal => {
+                    let is_q = key.code == KeyCode::Char('q');
+                    if !is_q {
+                        app.confirm_quit = false;
                     }
-                    KeyCode::Up | KeyCode::Char('k') => app.move_up(),
-                    KeyCode::Down | KeyCode::Char('j') => app.move_down(),
-                    KeyCode::Left | KeyCode::Char('h') => app.move_left(),
-                    KeyCode::Right | KeyCode::Char('l') => app.move_right(),
-                    KeyCode::Char(' ') => app.toggle_cell(),
-                    KeyCode::Char('w') => {
-                        if let Err(e) = app.write_all() {
-                            app.status = format!("error: {e:#}");
+                    if key.code != KeyCode::Char('g') {
+                        app.pending_g = false;
+                    }
+                    match key.code {
+                        KeyCode::Char('q') => {
+                            let dirty = app.modified_cols.iter().any(|&m| m)
+                                || app.modified_rows.iter().any(|&m| m);
+                            if dirty && !app.confirm_quit {
+                                app.status = "Unsaved changes — press w to save or q again to quit".into();
+                                app.confirm_quit = true;
+                            } else {
+                                app.quit = true;
+                            }
                         }
+                        KeyCode::Esc => {
+                            app.status = String::new();
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => app.move_up(),
+                        KeyCode::Down | KeyCode::Char('j') => app.move_down(),
+                        KeyCode::Left | KeyCode::Char('h') => app.move_left(),
+                        KeyCode::Right | KeyCode::Char('l') => app.move_right(),
+                        KeyCode::Char(' ') => app.toggle_cell(),
+                        KeyCode::Char('w') => {
+                            if let Err(e) = app.write_all() {
+                                app.status = format!("error: {e:#}");
+                            }
+                        }
+                        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.start_create_project();
+                        }
+                        KeyCode::Char('g') => {
+                            if app.pending_g {
+                                app.cursor_row = 0;
+                                app.pending_g = false;
+                            } else {
+                                app.pending_g = true;
+                            }
+                        }
+                        KeyCode::Char('G') => {
+                            if !app.rows.is_empty() {
+                                app.cursor_row = app.rows.len() - 1;
+                            }
+                        }
+                        KeyCode::Char('i') => app.start_edit_interface(),
+                        _ => {}
                     }
-                    KeyCode::Char('n') => app.start_create_project(),
-                    KeyCode::Char('i') => app.start_edit_interface(),
-                    _ => {}
-                },
+                }
             }
         }
 

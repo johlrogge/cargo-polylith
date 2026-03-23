@@ -247,3 +247,25 @@ fn project_new_prints_hint() {
         .success()
         .stdout(predicate::str::contains("my_project"));
 }
+
+#[test]
+fn project_new_creates_bin_crate_without_workspace() {
+    let dir = TempDir::new().unwrap();
+    init_workspace(&dir);
+
+    cargo_polylith()
+        .args(["polylith", "project", "new", "myapp"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(dir.path().join("projects/myapp/Cargo.toml")).unwrap();
+    assert!(
+        !content.contains("[workspace]"),
+        "project Cargo.toml must not contain [workspace] section: {content}"
+    );
+    assert!(
+        content.contains("[[bin]]"),
+        "project Cargo.toml must contain [[bin]] section: {content}"
+    );
+}

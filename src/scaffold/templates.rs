@@ -64,9 +64,8 @@ name = "{name}"
 path = "src/main.rs"
 
 [dependencies]
-# Add base and component deps here, e.g.:
-# my-base = {{ path = "../../bases/my-base" }}
-# my-component-stub = {{ path = "../../components/my-component-stub", package = "my-component-stub" }}
+# Add component and base deps here, e.g.:
+# example-impl = {{ path = "../../components/example-impl", package = "example-impl" }}
 "#
     )
 }

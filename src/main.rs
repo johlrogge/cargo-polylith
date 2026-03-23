@@ -80,6 +80,9 @@ fn main() {
                 }
             }
         }
+        PolylithCommand::Cargo { profile, args: cargo_args } => {
+            commands::profile::run_cargo(&profile, &cargo_args, workspace_root)
+        }
     };
 
     if let Err(e) = result {

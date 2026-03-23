@@ -40,13 +40,9 @@ fn check_json_fixture_has_only_warning_violations() {
     let violations = parsed["violations"].as_array().unwrap();
     // All violations from the fixture are warnings (no hard errors).
     // The cli base has path deps on logger and parser; parser has a path dep on logger
-    // (hardwired-dep). standalone-project has its own [workspace] section, is not
-    // in root workspace members, and has no base dep
-    // (project_has_own_workspace, project_not_in_root_workspace, project_missing_base).
+    // (hardwired-dep). standalone-project has no base dep (project_missing_base).
     let allowed_warning_kinds = [
         "hardwired_dep",
-        "project_has_own_workspace",
-        "project_not_in_root_workspace",
         "project_missing_base",
         "missing_interface",
     ];
@@ -477,28 +473,6 @@ fn check_duplicate_component_name_is_warning() {
         .stdout(predicate::str::contains("duplicate-name"));
 }
 
-// ── test-project marker suppresses no-base ───────────────────────────────────
-
-#[test]
-fn check_test_project_marker_suppresses_no_base() {
-    let tmp = init_valid_workspace();
-
-    let proj = tmp.path().join("projects/bdd");
-    fs::create_dir_all(proj.join("src")).unwrap();
-    fs::write(proj.join("src/lib.rs"), "// tests\n").unwrap();
-    fs::write(
-        proj.join("Cargo.toml"),
-        "[package]\nname=\"bdd\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
-         [package.metadata.polylith]\ntest-project = true\n",
-    ).unwrap();
-
-    cargo_polylith()
-        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("no-base").not());
-}
-
 // ── ambiguous interface warning ───────────────────────────────────────────────
 
 #[test]
@@ -554,7 +528,7 @@ fn check_no_ambiguous_interface_when_default_impl_exists() {
 // ── project-not-in-workspace check ────────────────────────────────────────────
 
 #[test]
-fn check_project_not_in_root_workspace_is_warning() {
+fn check_project_not_in_root_workspace_is_error() {
     let tmp = TempDir::new().unwrap();
     // Root workspace members do NOT include projects/*
     fs::write(
@@ -572,16 +546,15 @@ fn check_project_not_in_root_workspace_is_warning() {
     fs::write(
         proj.join("Cargo.toml"),
         "[package]\nname=\"my-app\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
-         [package.metadata.polylith]\ntest-project = true\n\
          [[bin]]\nname = \"my-app\"\npath = \"src/main.rs\"\n\
          [dependencies]\n",
     ).unwrap();
 
-    // Should exit 0 (warning, not error) and show the tag
+    // Should exit 1 (error) and show the tag
     cargo_polylith()
         .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
         .assert()
-        .success()
+        .failure()
         .stdout(predicate::str::contains("project-not-in-workspace"));
 }
 
@@ -604,7 +577,6 @@ fn check_project_in_root_workspace_no_violation() {
     fs::write(
         proj.join("Cargo.toml"),
         "[package]\nname=\"my-app\"\nversion=\"0.1.0\"\nedition=\"2021\"\n\
-         [package.metadata.polylith]\ntest-project = true\n\
          [[bin]]\nname = \"my-app\"\npath = \"src/main.rs\"\n\
          [dependencies]\n",
     ).unwrap();
@@ -1002,10 +974,10 @@ fn check_project_feature_drift_disjoint_is_warning() {
         .stdout(predicate::str::contains("project-feature-drift"));
 }
 
-// ── project with own [workspace] section is a warning ─────────────────────────
+// ── project with own [workspace] section is an error ──────────────────────────
 
 #[test]
-fn check_warns_project_with_own_workspace() {
+fn check_project_with_own_workspace_is_error() {
     let tmp = init_valid_workspace();
     let proj = tmp.path().join("projects/bad-project");
     fs::create_dir_all(proj.join("src")).unwrap();
@@ -1017,7 +989,7 @@ fn check_warns_project_with_own_workspace() {
     cargo_polylith()
         .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "check"])
         .assert()
-        .success()  // warning only — exit 0
+        .failure()  // error — exit 1
         .stdout(predicate::str::contains("bad-project")
             .and(predicate::str::contains("[workspace]")));
 }

@@ -51,9 +51,11 @@ context (selected by path dependency in a project workspace).
 components and expose a library API (`src/lib.rs`) so that project workspace manifests can call
 their `run()` function from a thin `src/main.rs`. Bases must not have their own `src/main.rs`.
 
-**Projects** — standalone Cargo workspaces in `projects/`. Each project is an independently
-buildable workspace that selects a specific combination of bases and component implementations
-via path dependencies in `[dependencies]`.
+**Projects** — bin crates under `projects/`, listed as members of the root workspace. Each project
+selects a specific combination of bases and component implementations via path dependencies in
+`[dependencies]`. Projects are workspace members — not sub-workspaces of their own. Having a
+`[workspace]` section in a project `Cargo.toml`, or a project that is not listed in the root
+workspace members, is a hard error.
 
 **Development project** — the root workspace itself. It contains all components and bases and
 is optimised for fast feedback during development and testing. Components in the root workspace
@@ -72,7 +74,7 @@ pre-check on public symbol names.
 | Concept | Clojure polylith | cargo-polylith | Why |
 |---|---|---|---|
 | **Interface declaration** | Namespace structure — components implement an interface by having the same namespace | `[package.metadata.polylith] interface = "..."` in Cargo.toml | Rust has no namespace-based interface; explicit metadata is unambiguous and prevents typos from creating phantom interfaces |
-| **Profile / implementation switching** | Named profiles in `deps.edn` select which source directories are compiled in | Named profiles stored in `profiles/<name>.profile`; `profile build` generates a standalone workspace Cargo.toml applying the profile's implementation overrides | Mirrors Clojure polylith's profile concept — `[workspace.dependencies]` is the wiring diagram, profiles override specific entries for different build targets |
+| **Profile / implementation switching** | Named profiles in `deps.edn` select which source directories are compiled in | Named profiles stored in `profiles/<name>.profile`; `cargo polylith cargo --profile <name> <subcommand>` generates a standalone workspace applying the profile's implementation overrides and delegates to cargo. Swapping works at the brick level — one component can depend on another via a named interface, and the profile selects which implementing brick is compiled in. | Mirrors Clojure polylith's profile concept — `[workspace.dependencies]` is the wiring diagram, profiles override specific entries for different build targets |
 | **Development project** | A dedicated `development/` project at the workspace root | The root workspace itself | Cargo's workspace model is already the right structure; no separate project needed |
 | **Stub-first development** | Default profile uses the primary implementation | Root workspace uses lightweight/stub components by default; projects select production-grade implementations via path deps | Enables fast tests without heavy deps (PipeWire, file scanning, sha2, etc.) |
 | **Test/dev projects** | The development project has no base requirement | Projects in `projects/` that are test or development harnesses do not require a base dependency | A test runner is an entry point in its own right; forcing a base dependency would be artificial |
@@ -121,7 +123,8 @@ cargo polylith base new api
 
 # 5. Create a deployable project
 cargo polylith project new production
-# → projects/production/Cargo.toml  (standalone workspace, add [dependencies] for impls)
+# → projects/production/Cargo.toml  (bin crate, added to root workspace members)
+# → projects/production/src/main.rs
 
 # 6. Inspect the workspace
 cargo polylith info
@@ -133,7 +136,7 @@ cargo polylith check
 # 8. Work with profiles (optional — for named implementation sets)
 cargo polylith profile add http-client --impl components/http-client-real --profile production
 cargo polylith profile list
-cargo polylith profile build production
+cargo polylith cargo --profile production build
 ```
 
 ---
@@ -245,7 +248,9 @@ Produces:
 
 ```
 projects/production/
-  Cargo.toml     ← standalone [workspace], add [dependencies] for component impls
+  Cargo.toml     ← bin crate; also added to root workspace members
+  src/
+    main.rs      ← thin entry point; calls a base's run()
 ```
 
 Edit the manifest to add the bases you want to ship and declare which component
@@ -337,6 +342,8 @@ cargo polylith check
 | `missing-lib` | Component or base has no `src/lib.rs` |
 | `missing-impl` | Component has no `src/lib.rs` AND no `src/<name>.rs` |
 | `dep-key-mismatch` | A path dependency key does not match the target crate's `package.name` — use the correct name as the dep key, or add `package = "..."` as an alias |
+| `project-has-own-workspace` | A project `Cargo.toml` contains a `[workspace]` section — projects must be bin crates in the root workspace, not sub-workspaces |
+| `project-not-in-root-workspace` | A project under `projects/` is not listed as a member of the root workspace `[workspace].members` |
 
 **Warnings** (exit 0):
 
@@ -345,7 +352,7 @@ cargo polylith check
 | `orphan` | Component is not reachable from any base or project (including as a swapped implementation via `package =`) |
 | `wildcard` | Component's `lib.rs` uses `pub use <crate>::*` — prefer explicit re-exports |
 | `base-has-main` | A base has `src/main.rs` — executable entry points belong in projects |
-| `no-base` | A project has no base dependency — suppress with `[package.metadata.polylith] test-project = true` for test/dev projects |
+| `no-base` | A project has no base dependency — polylith projects must include at least one base |
 | `not-in-workspace` | A component or base exists in its directory but is not listed in root workspace members |
 | `ambiguous-interface` | Two or more components declare the same interface name but none has the default package name — every consumer must explicitly declare which implementation to use |
 | `duplicate-name` | Two or more components share the same package name — rename the stub and declare `interface` metadata on both |
@@ -401,11 +408,13 @@ cargo polylith profile list --json
 Flags:
 - `--json` — machine-readable output
 
-#### `cargo polylith profile build <name>`
+#### `cargo polylith profile build <name>` (deprecated)
 
 Generates `profiles/<name>/Cargo.toml` — a standalone profile workspace manifest
 that applies the named profile's implementation overrides to the root `[workspace.dependencies]`.
 Optionally invokes `cargo build` inside that generated workspace.
+
+Deprecated in favour of `cargo polylith cargo --profile <name> build`.
 
 ```
 cargo polylith profile build production
@@ -426,6 +435,26 @@ cargo polylith profile add http-client \
 ```
 
 Creates `profiles/<name>.profile` if it does not exist.
+
+---
+
+### `cargo polylith cargo --profile <name> <subcommand...>`
+
+Generates the profile workspace and delegates to cargo with `--manifest-path`.
+Accepts any cargo subcommand and trailing flags.
+
+```
+cargo polylith cargo --profile production build
+cargo polylith cargo --profile dev test
+cargo polylith cargo --profile production clippy -- -D warnings
+```
+
+The profile workspace is regenerated before each invocation. Only the bricks
+transitively needed by the profile's selected implementations are included —
+alternative implementations of the same interface are excluded. This enables
+correct component-to-component swapping: if a component depends on
+`fact-store = { workspace = true }`, the profile controls which implementation
+`fact-store` resolves to.
 
 ---
 
@@ -451,10 +480,12 @@ Key bindings:
 |---|---|
 | `←→↑↓` / `hjkl` | Navigate |
 | `Space` | Toggle direct dependency on/off |
-| `i` | Edit the component's interface name (Enter to save, Esc to cancel) |
+| `i` | Edit the component's interface name (Enter to save, Esc to cancel); shows "Bases do not have interfaces" on base rows |
 | `w` | Write changes to disk |
-| `n` | Create a new project |
-| `q` / `Esc` | Quit |
+| `Ctrl-n` | Create a new project |
+| `Esc` | Clear status message |
+| `q` | Quit (warns on first press if there are unsaved changes; press `q` again to force-quit) |
+| `gg` / `G` | Jump to first / last row |
 
 ---
 
@@ -547,9 +578,11 @@ my-mono/
       src/lib.rs          ← exposes run()
   projects/
     production/
-      Cargo.toml          ← standalone [workspace]; [dependencies] selects real components
+      Cargo.toml          ← bin crate (root workspace member); [dependencies] selects real components
+      src/main.rs
     bdd/
-      Cargo.toml          ← test/dev project; [dependencies] uses stubs
+      Cargo.toml          ← test/dev project (root workspace member); [dependencies] uses stubs
+      src/main.rs
   profiles/
     production.profile    ← implementation selections for production builds
     staging.profile       ← implementation selections for staging builds

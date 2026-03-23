@@ -2,6 +2,17 @@
 
 ## Shipped
 
+### 0.8.0 — Profile BFS transitive closure, `cargo polylith cargo` ✅
+
+- `resolve_profile_workspace` now uses BFS transitive closure — only bricks transitively needed by the profile's selected implementations are included in the generated workspace. Alternative implementations of the same interface are excluded, enabling correct component-to-component swapping (e.g. a component that depends on `fact-store = { workspace = true }` — the profile controls which implementation `fact-store` resolves to).
+- `cargo polylith cargo --profile <name> <subcommand...>` — generates the profile workspace and delegates to cargo with `--manifest-path`. Accepts any cargo subcommand and trailing flags:
+  ```
+  cargo polylith cargo --profile production build
+  cargo polylith cargo --profile dev test
+  cargo polylith cargo --profile production clippy -- -D warnings
+  ```
+- `cargo polylith profile build <name>` is deprecated in favour of the new `cargo` subcommand.
+
 ### 0.7.0 — Base update, project set-impl, profile new, MCP expansion, ADRs ✅
 
 Commands and tooling:
@@ -18,7 +29,7 @@ Commands and tooling:
 Named implementation sets that mirror the Clojure polylith profiles concept.
 
 - `cargo polylith profile list [--json]` — lists all profiles and their selections
-- `cargo polylith profile build <name> [--no-build]` — generates `profiles/<name>/Cargo.toml` (a standalone workspace applying the profile's overrides) and optionally runs `cargo build`
+- `cargo polylith profile build <name> [--no-build]` — generates `profiles/<name>/Cargo.toml` (a standalone workspace applying the profile's overrides) and optionally runs `cargo build` (deprecated — use `cargo polylith cargo --profile <name> build` instead)
 - `cargo polylith profile add <interface> --impl <path> --profile <name>` — adds or updates an implementation selection in a `.profile` file
 - `cargo polylith check --profile <name>` — validates a named profile's implementation paths
 - New check warnings: `hardwired-dep`, `profile-impl-not-found`, `profile-impl-not-component`
@@ -32,7 +43,7 @@ stdin/stdout JSON-RPC transport, wires directly into Claude Code and other MCP c
 
 ## Next — model alignment
 
-### ⚠️ Model correction: projects as bin crates, workspace as profile [HIGHEST PRIORITY]
+### ✅ Model correction: projects as bin crates, workspace as profile
 
 The current model treats each project as a separate Cargo workspace under `projects/`.
 This contradicts polylith's core principle of "one workspace, many deployable artifacts"
@@ -70,17 +81,20 @@ something about how profiles are intended to work?
 
 ---
 
+### ✅ TUI keybinding improvements (`cargo polylith edit`)
+
+- `Esc` no longer quits — clears the status message instead (safe reset, Helix convention)
+- `n` moved to `Ctrl-n` for new project — frees `n` from conflicting with Helix's next-search-match
+- `gg` / `G` — jump to first/last row in the grid
+- Dirty-quit guard — on first `q` with unsaved changes, warns "Unsaved changes — press w to save or q again to quit"; second `q` force-quits
+- `i` on a base row now shows "Bases do not have interfaces" instead of silently doing nothing
+
+---
+
 ### TUI: transitive dependency hover ✅
 When the cursor rests on a cell marked as transitive, show the dependency chain
 that explains *why* it is pulled in — e.g. `scaffold via: myproject → cli (base) → mcp → scaffold`.
 Shown in the status bar.
-
-### Check rule configuration
-Support named rule sets so teams can define custom check rules, output formats,
-or workspace conventions in `.polylith/config.toml` (or similar). Lets different
-projects opt in to stricter or more lenient rule sets without forking the tool.
-> Note: implementation-selection profiles (`cargo polylith profile`) shipped in 0.6.0.
-> This item covers a separate concept: configurable check rules.
 
 ### Docs pass with the documenter agent ✅
 README.md and ROADMAP.md updated to reflect the current feature set (MCP server,
