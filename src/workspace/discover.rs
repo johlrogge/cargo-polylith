@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use cargo_toml::Manifest;
 
-use super::model::{Brick, BrickKind, ExternalDepInfo, Profile, Project, WorkspaceMap, WorkspacePathDep};
+use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
 
 /// Resolve the workspace root: use `override_root` if given, otherwise walk
-/// up from `start` searching for a `Cargo.toml` with `[workspace]`.
+/// up from `start` searching for a `Polylith.toml` or `Cargo.toml` with `[workspace]`.
 pub fn resolve_root(start: &Path, override_root: Option<&Path>) -> Result<PathBuf> {
     match override_root {
         Some(p) => {
@@ -17,8 +17,8 @@ pub fn resolve_root(start: &Path, override_root: Option<&Path>) -> Result<PathBu
                 start.join(p)
             };
             anyhow::ensure!(
-                abs.join("Cargo.toml").exists(),
-                "no Cargo.toml found at workspace root '{}'",
+                abs.join("Polylith.toml").exists() || abs.join("Cargo.toml").exists(),
+                "no Polylith.toml or Cargo.toml found at workspace root '{}'",
                 abs.display()
             );
             Ok(abs)
@@ -27,26 +27,38 @@ pub fn resolve_root(start: &Path, override_root: Option<&Path>) -> Result<PathBu
     }
 }
 
-/// Walk up from `start` to find the workspace root Cargo.toml (the one with `[workspace]`).
-/// If no workspace Cargo.toml is found, returns the nearest directory containing any
+/// Walk up from `start` to find the workspace root.
+///
+/// Preferred marker: `Polylith.toml` — return that directory immediately if found.
+/// Fallback: `Cargo.toml` with `[workspace]` — for backward compat with unmigrated workspaces.
+///
+/// If no workspace root is found, returns the nearest directory containing any
 /// Cargo.toml, or `start` itself — callers should check `WorkspaceMap::is_workspace`.
 pub fn find_workspace_root(start: &Path) -> Result<PathBuf> {
     let mut current = start.to_path_buf();
+    let mut cargo_ws_root: Option<PathBuf> = None;
     let mut fallback: Option<PathBuf> = None;
     loop {
+        // Prefer Polylith.toml — if found, this directory is the root.
+        if current.join("Polylith.toml").exists() {
+            return Ok(current);
+        }
         let candidate = current.join("Cargo.toml");
         if candidate.exists() {
             let manifest = Manifest::from_path(&candidate)
                 .with_context(|| format!("failed to parse {}", candidate.display()))?;
-            if manifest.workspace.is_some() {
-                return Ok(current);
+            if manifest.workspace.is_some() && cargo_ws_root.is_none() {
+                cargo_ws_root = Some(current.clone());
             }
             if fallback.is_none() {
                 fallback = Some(current.clone());
             }
         }
         if !current.pop() {
-            return Ok(fallback.unwrap_or_else(|| start.to_path_buf()));
+            // No Polylith.toml found; fall back to cargo workspace root, then any Cargo.toml
+            return Ok(cargo_ws_root
+                .or(fallback)
+                .unwrap_or_else(|| start.to_path_buf()));
         }
     }
 }
@@ -144,6 +156,22 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
             (vec![], false, std::collections::HashMap::new(), std::collections::HashMap::new())
         }
     };
+    // Parse Polylith.toml if present
+    let polylith_toml = parse_polylith_toml(root)?;
+
+    // When Polylith.toml is present, use its [libraries] as root_workspace_deps (if non-empty)
+    let root_workspace_deps = if let Some(pt) = &polylith_toml {
+        if !pt.libraries.is_empty() {
+            pt.libraries.clone()
+        } else {
+            root_workspace_deps
+        }
+    } else {
+        root_workspace_deps
+    };
+
+    let is_workspace = is_workspace || polylith_toml.is_some();
+
     Ok(WorkspaceMap {
         root: root.to_path_buf(),
         components,
@@ -153,7 +181,81 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
         is_workspace,
         root_workspace_deps,
         root_workspace_interface_deps,
+        polylith_toml,
     })
+}
+
+/// Parse `Polylith.toml` from the given root directory, returning `None` if not present.
+fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
+    let path = root.join("Polylith.toml");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    let doc: toml_edit::DocumentMut = content
+        .parse()
+        .with_context(|| format!("parsing {}", path.display()))?;
+
+    let schema_version = doc
+        .get("workspace")
+        .and_then(|w| w.get("schema_version"))
+        .and_then(|v| v.as_value())
+        .and_then(|v| v.as_integer())
+        .map(|n| n as u32)
+        .unwrap_or(1);
+
+    let workspace_package = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .map(|pkg| WorkspacePackageMeta {
+            version: pkg.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            edition: pkg.get("edition").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            authors: pkg
+                .get("authors")
+                .and_then(|v| v.as_value())
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            license: pkg.get("license").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            repository: pkg.get("repository").and_then(|v| v.as_str()).map(|s| s.to_string()),
+        });
+
+    let mut libraries = std::collections::HashMap::new();
+    if let Some(libs) = doc.get("libraries").and_then(|t| t.as_table()) {
+        for (k, v) in libs.iter() {
+            // Skip path deps
+            let has_path = v.as_value().and_then(|v| v.as_inline_table()).and_then(|it| it.get("path")).is_some()
+                || v.as_table().and_then(|t| t.get("path")).is_some();
+            if has_path {
+                continue;
+            }
+            let version = parse_version_from_item(v);
+            let features = parse_features_from_item(v);
+            libraries.insert(k.to_string(), ExternalDepInfo { features, version });
+        }
+    }
+
+    let mut profiles = std::collections::HashMap::new();
+    if let Some(profs) = doc.get("profiles").and_then(|t| t.as_table()) {
+        for (k, v) in profs.iter() {
+            if let Some(s) = v.as_value().and_then(|v| v.as_str()) {
+                profiles.insert(k.to_string(), s.to_string());
+            }
+        }
+    }
+
+    Ok(Some(PolylithToml {
+        schema_version,
+        workspace_package,
+        libraries,
+        profiles,
+    }))
 }
 
 fn brick_dir(root: &Path, kind: &BrickKind) -> PathBuf {
@@ -729,11 +831,17 @@ pub fn resolve_profile_workspace(
         }
     }
 
+    let workspace_package = map
+        .polylith_toml
+        .as_ref()
+        .and_then(|pt| pt.workspace_package.clone());
+
     ResolvedProfileWorkspace {
         profile_name: profile.name.clone(),
         members,
         interface_dep_lines,
         library_dep_lines,
+        workspace_package,
     }
 }
 
@@ -920,6 +1028,7 @@ mod tests {
             is_workspace: true,
             root_workspace_deps: HashMap::new(),
             root_workspace_interface_deps,
+            polylith_toml: None,
         };
 
         // Profile selects store_file for the "store" interface
@@ -940,5 +1049,79 @@ mod tests {
 
         assert!(has_store_file, "store_file should be in members: {:?}", resolved.members);
         assert!(!has_store_mem, "store_mem should NOT be in members: {:?}", resolved.members);
+    }
+
+    #[test]
+    fn find_workspace_root_finds_polylith_toml() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+
+        // Create Polylith.toml at root (no Cargo.toml with [workspace])
+        fs::write(
+            tmp.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n",
+        ).unwrap();
+
+        // Create a subdirectory
+        let subdir = tmp.path().join("components/my-comp");
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(
+            subdir.join("Cargo.toml"),
+            "[package]\nname = \"my-comp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ).unwrap();
+
+        // find_workspace_root from the subdirectory should find the Polylith.toml directory
+        let found = find_workspace_root(&subdir).unwrap();
+        assert_eq!(found, tmp.path(), "should find Polylith.toml directory");
+    }
+
+    #[test]
+    fn parse_polylith_toml_returns_none_when_absent() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+        let result = parse_polylith_toml(tmp.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_polylith_toml_parses_all_sections() {
+        use tempfile::TempDir;
+        let tmp = TempDir::new().unwrap();
+
+        fs::write(
+            tmp.path().join("Polylith.toml"),
+            r#"[workspace]
+schema_version = 1
+
+[workspace.package]
+version = "0.5.0"
+edition = "2021"
+license = "MIT"
+
+[libraries]
+serde = { version = "1", features = ["derive"] }
+tokio = "1.40"
+
+[profiles]
+dev = "profiles/dev.profile"
+prod = "profiles/prod.profile"
+"#,
+        ).unwrap();
+
+        let pt = parse_polylith_toml(tmp.path()).unwrap().unwrap();
+        assert_eq!(pt.schema_version, 1);
+
+        let pkg = pt.workspace_package.as_ref().unwrap();
+        assert_eq!(pkg.version.as_deref(), Some("0.5.0"));
+        assert_eq!(pkg.edition.as_deref(), Some("2021"));
+        assert_eq!(pkg.license.as_deref(), Some("MIT"));
+
+        assert_eq!(pt.libraries.len(), 2);
+        let serde_info = pt.libraries.get("serde").unwrap();
+        assert_eq!(serde_info.version.as_deref(), Some("1"));
+        assert!(serde_info.features.contains(&"derive".to_string()));
+
+        assert_eq!(pt.profiles.len(), 2);
+        assert_eq!(pt.profiles.get("dev").map(|s| s.as_str()), Some("profiles/dev.profile"));
     }
 }

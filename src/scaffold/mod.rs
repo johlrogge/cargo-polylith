@@ -219,6 +219,35 @@ pub fn write_profile_workspace(
     let mut dep_lines = resolved.interface_dep_lines.clone();
     dep_lines.extend(resolved.library_dep_lines.iter().cloned());
 
+    // Build [workspace.package] section if workspace_package is set
+    let pkg_section = if let Some(pkg) = &resolved.workspace_package {
+        let mut lines = vec!["[workspace.package]".to_string()];
+        if let Some(v) = &pkg.version {
+            lines.push(format!("version = \"{}\"", v));
+        }
+        if let Some(e) = &pkg.edition {
+            lines.push(format!("edition = \"{}\"", e));
+        }
+        if !pkg.authors.is_empty() {
+            let authors_list = pkg
+                .authors
+                .iter()
+                .map(|a| format!("\"{}\"", a))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("authors = [{}]", authors_list));
+        }
+        if let Some(l) = &pkg.license {
+            lines.push(format!("license = \"{}\"", l));
+        }
+        if let Some(r) = &pkg.repository {
+            lines.push(format!("repository = \"{}\"", r));
+        }
+        format!("\n{}\n", lines.join("\n"))
+    } else {
+        String::new()
+    };
+
     let deps_section = if dep_lines.is_empty() {
         String::new()
     } else {
@@ -234,9 +263,10 @@ pub fn write_profile_workspace(
          {members}\n\
          ]\n\
          resolver = \"2\"\n\
-         {deps}",
+         {pkg}{deps}",
         name = resolved.profile_name,
         members = member_lines,
+        pkg = pkg_section,
         deps = deps_section,
     );
 
@@ -322,9 +352,8 @@ pub fn create_dev_profile_from_deps(root: &Path, impls: &[(String, String)]) -> 
 }
 
 /// Read root `Cargo.toml` with `toml_edit`, set `[workspace].members` to an empty array,
-/// add `exclude` patterns for polylith directories so Cargo does not claim bricks as root
-/// workspace members (required for profile workspaces to claim them), and write back.
-/// Preserves all other content (including `[workspace.dependencies]`).
+/// and write back. Preserves all other content (including `[workspace.dependencies]`).
+#[allow(dead_code)]
 pub fn clear_root_members(root: &Path) -> Result<()> {
     let manifest_path = root.join("Cargo.toml");
     let content = fs::read_to_string(&manifest_path)
@@ -338,19 +367,217 @@ pub fn clear_root_members(root: &Path) -> Result<()> {
         doc["workspace"]["members"] = toml_edit::array();
     }
 
-    // Add exclude patterns so the root workspace does not claim bricks even though
-    // they live under the workspace root directory. Without this, Cargo refuses to
-    // let profile workspaces claim them as members.
-    let mut exclude = toml_edit::Array::new();
-    for pattern in &["components/*", "bases/*", "projects/*", "profiles/*"] {
-        exclude.push(*pattern);
-    }
-    doc["workspace"]["exclude"] = toml_edit::value(exclude);
 
     fs::write(&manifest_path, doc.to_string())
         .with_context(|| format!("writing {}", manifest_path.display()))?;
 
     Ok(())
+}
+
+/// Demote the root workspace:
+/// 1. Extracts `[workspace.package]` and non-path `[workspace.dependencies]` from `Cargo.toml`
+/// 2. Discovers existing profile names from `profiles/*.profile`
+/// 3. Writes `Polylith.toml` with the extracted metadata
+/// 4. Removes the entire `[workspace]` table from root `Cargo.toml`
+///
+/// If `Polylith.toml` already exists and `!force`, returns an error.
+pub fn demote_root_workspace(root: &Path, force: bool) -> Result<()> {
+    let polylith_toml_path = root.join("Polylith.toml");
+    if polylith_toml_path.exists() && !force {
+        anyhow::bail!(
+            "Polylith.toml already exists at {} — use --force to overwrite",
+            polylith_toml_path.display()
+        );
+    }
+
+    let manifest_path = root.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let mut doc: DocumentMut = content.parse().context("parsing root Cargo.toml")?;
+
+    // Extract [workspace.package] fields
+    let version = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let edition = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("edition"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let authors: Vec<String> = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("authors"))
+        .and_then(|v| v.as_value())
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    let license = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("license"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let repository = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("repository"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let has_package_meta = version.is_some() || edition.is_some() || !authors.is_empty()
+        || license.is_some() || repository.is_some();
+
+    // Extract non-path deps from [workspace.dependencies]
+    let mut libraries: Vec<(String, String)> = vec![];
+    if let Some(ws_deps) = doc
+        .get("workspace")
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        let mut sorted_keys: Vec<String> = ws_deps.iter().map(|(k, _)| k.to_string()).collect();
+        sorted_keys.sort();
+        for key in &sorted_keys {
+            if let Some(val) = ws_deps.get(key.as_str()) {
+                // Skip path deps
+                let has_path = val.as_value().and_then(|v| v.as_inline_table()).and_then(|it| it.get("path")).is_some()
+                    || val.as_table().and_then(|t| t.get("path")).is_some();
+                if has_path {
+                    continue;
+                }
+                // Render the dep value as a TOML inline expression
+                let rendered = render_dep_value(val);
+                libraries.push((key.clone(), rendered));
+            }
+        }
+    }
+
+    // Discover existing profile names from profiles/*.profile
+    let profiles_dir = root.join("profiles");
+    let mut profile_names: Vec<String> = vec![];
+    if profiles_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&profiles_dir) {
+            let mut names: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path().extension().and_then(|ext| ext.to_str()) == Some("profile")
+                })
+                .filter_map(|e| {
+                    e.path()
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                })
+                .collect();
+            names.sort();
+            profile_names = names;
+        }
+    }
+
+    // Build Polylith.toml content
+    let mut polylith_content = String::new();
+    polylith_content.push_str("[workspace]\n");
+    polylith_content.push_str("schema_version = 1\n");
+
+    if has_package_meta {
+        polylith_content.push_str("\n[workspace.package]\n");
+        if let Some(v) = &version {
+            polylith_content.push_str(&format!("version = \"{}\"\n", v));
+        }
+        if let Some(e) = &edition {
+            polylith_content.push_str(&format!("edition = \"{}\"\n", e));
+        }
+        if !authors.is_empty() {
+            let authors_list = authors.iter().map(|a| format!("\"{}\"", a)).collect::<Vec<_>>().join(", ");
+            polylith_content.push_str(&format!("authors = [{}]\n", authors_list));
+        }
+        if let Some(l) = &license {
+            polylith_content.push_str(&format!("license = \"{}\"\n", l));
+        }
+        if let Some(r) = &repository {
+            polylith_content.push_str(&format!("repository = \"{}\"\n", r));
+        }
+    }
+
+    if !libraries.is_empty() {
+        polylith_content.push_str("\n[libraries]\n");
+        for (key, val) in &libraries {
+            polylith_content.push_str(&format!("{} = {}\n", key, val));
+        }
+    }
+
+    if !profile_names.is_empty() {
+        polylith_content.push_str("\n[profiles]\n");
+        for name in &profile_names {
+            polylith_content.push_str(&format!("{} = \"profiles/{}.profile\"\n", name, name));
+        }
+    }
+
+    fs::write(&polylith_toml_path, &polylith_content)
+        .with_context(|| format!("writing {}", polylith_toml_path.display()))?;
+
+    // Remove [workspace] from root Cargo.toml entirely
+    doc.remove("workspace");
+
+    fs::write(&manifest_path, doc.to_string())
+        .with_context(|| format!("writing {}", manifest_path.display()))?;
+
+    Ok(())
+}
+
+/// Render a toml_edit `Item` value as a TOML inline string (for Polylith.toml [libraries]).
+fn render_dep_value(val: &toml_edit::Item) -> String {
+    // Bare string (version only)
+    if let Some(s) = val.as_value().and_then(|v| v.as_str()) {
+        return format!("\"{}\"", s);
+    }
+    // Inline table
+    if let Some(it) = val.as_value().and_then(|v| v.as_inline_table()) {
+        let pairs: Vec<String> = it
+            .iter()
+            .map(|(k, v)| {
+                if let Some(s) = v.as_str() {
+                    format!("{} = \"{}\"", k, s)
+                } else if let Some(arr) = v.as_array() {
+                    let items: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| format!("\"{}\"", s))
+                        .collect();
+                    format!("{} = [{}]", k, items.join(", "))
+                } else {
+                    format!("{} = {}", k, v)
+                }
+            })
+            .collect();
+        return format!("{{ {} }}", pairs.join(", "));
+    }
+    // Regular table
+    if let Some(t) = val.as_table() {
+        let pairs: Vec<String> = t
+            .iter()
+            .map(|(k, v)| {
+                if let Some(s) = v.as_value().and_then(|v| v.as_str()) {
+                    format!("{} = \"{}\"", k, s)
+                } else if let Some(arr) = v.as_value().and_then(|v| v.as_array()) {
+                    let items: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| format!("\"{}\"", s))
+                        .collect();
+                    format!("{} = [{}]", k, items.join(", "))
+                } else {
+                    format!("{} = {}", k, v)
+                }
+            })
+            .collect();
+        return format!("{{ {} }}", pairs.join(", "));
+    }
+    // Fallback
+    val.to_string()
 }
 
 /// Append a member path to the root workspace `Cargo.toml` `[workspace].members` array
