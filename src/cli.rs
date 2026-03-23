@@ -93,9 +93,9 @@ pub enum PolylithCommand {
     },
     /// Run a cargo command against a generated profile workspace
     Cargo {
-        /// Profile name to activate
-        #[arg(long, value_name = "NAME", required = true)]
-        profile: String,
+        /// Profile name to activate (defaults to "dev")
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
         /// Cargo subcommand and arguments (e.g. build, test, clippy -- -D warnings)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -149,6 +149,11 @@ pub enum ProfileAction {
         /// Profile name to update (without .profile extension)
         #[arg(long, value_name = "NAME")]
         profile: String,
+    },
+    /// Migrate root workspace members into a dev profile
+    Migrate {
+        #[arg(long)]
+        force: bool,
     },
 }
 

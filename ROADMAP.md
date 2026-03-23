@@ -2,6 +2,19 @@
 
 ## Shipped
 
+### 0.8.1 — `cargo polylith cargo` dev default, `profile migrate` ✅
+
+- `cargo polylith cargo` now defaults `--profile` to `dev` when the flag is omitted. If no dev profile exists, prints: `no dev profile found — run 'cargo polylith profile migrate' to set one up`.
+- `cargo polylith profile migrate [--force]` — migrates a workspace from the traditional "bricks in root workspace members" layout to the profiles-based model: reads `[workspace.dependencies]` interface path deps → writes `profiles/dev.profile` and generates `profiles/dev/Cargo.toml` → clears root `[workspace] members` to `[]`. `--force` overwrites an existing `profiles/dev.profile`. If the workspace is already migrated (members already empty), exits cleanly with a message.
+
+Post-migration workflow:
+```
+cargo polylith cargo check          # uses dev profile by default
+cargo polylith cargo build
+cargo polylith cargo test
+cargo polylith cargo --profile production build
+```
+
 ### 0.8.0 — Profile BFS transitive closure, `cargo polylith cargo` ✅
 
 - `resolve_profile_workspace` now uses BFS transitive closure — only bricks transitively needed by the profile's selected implementations are included in the generated workspace. Alternative implementations of the same interface are excluded, enabling correct component-to-component swapping (e.g. a component that depends on `fact-store = { workspace = true }` — the profile controls which implementation `fact-store` resolves to).

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use crate::commands::validate::validate_brick_name;
 use crate::output::table;
 use crate::workspace::{build_workspace_map, discover_profiles, resolve_profile_workspace, resolve_root};
+use std::fs;
 
 pub fn list(json: bool, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -71,6 +72,88 @@ pub fn new(name: &str, workspace_root: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
+pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let root = resolve_root(&cwd, workspace_root)?;
+
+    // Read root Cargo.toml to check current members using cargo_toml for reliability
+    let manifest_path = root.join("Cargo.toml");
+    let manifest = cargo_toml::Manifest::from_path(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+
+    // Check if members is already empty
+    let members_empty = manifest
+        .workspace
+        .as_ref()
+        .map(|ws| ws.members.is_empty())
+        .unwrap_or(true);
+
+    if members_empty {
+        eprintln!("workspace already migrated — root members is already empty");
+        return Ok(());
+    }
+
+    // Check if profiles/dev.profile already exists
+    let dev_profile_path = root.join("profiles/dev.profile");
+    if dev_profile_path.exists() && !force {
+        anyhow::bail!(
+            "profiles/dev.profile already exists — use --force to overwrite"
+        );
+    }
+
+    // Build workspace map to get interface deps
+    let map = build_workspace_map(&root)?;
+
+    // Collect interface deps: (key, path_string) pairs
+    let mut impl_pairs: Vec<(String, String)> = map
+        .root_workspace_interface_deps
+        .iter()
+        .map(|(key, dep)| (key.clone(), dep.path.clone()))
+        .collect();
+    impl_pairs.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Create profiles/dev.profile with the impl entries
+    crate::scaffold::create_dev_profile_from_deps(&root, &impl_pairs)?;
+    eprintln!("Created profiles/dev.profile");
+
+    // Discover the newly written profile and resolve + write the profile workspace
+    let profiles = discover_profiles(&root)?;
+    let dev_profile = profiles
+        .into_iter()
+        .find(|p| p.name == "dev")
+        .context("dev profile not found after creation")?;
+    let resolved = resolve_profile_workspace(&root, &dev_profile, &map);
+    let generated = crate::scaffold::write_profile_workspace(&root, &resolved)?;
+    eprintln!("Generated {}", generated.display());
+
+    // Clear root workspace members
+    crate::scaffold::clear_root_members(&root)?;
+    eprintln!("Cleared root workspace members");
+
+    // Print summary
+    println!();
+    println!("Migration complete.");
+    println!();
+    if impl_pairs.is_empty() {
+        println!("  No interface deps found in [workspace.dependencies].");
+    } else {
+        println!("  Migrated {} interface implementation(s) to profiles/dev.profile:", impl_pairs.len());
+        for (key, path) in &impl_pairs {
+            println!("    {} = \"{}\"", key, path);
+        }
+    }
+    println!();
+    println!("  Root workspace members cleared (previously managed components/bases/projects");
+    println!("  are now referenced via the generated profile workspace).");
+    println!();
+    println!("New workflow:");
+    println!("  cargo polylith cargo build       # build with dev profile (default)");
+    println!("  cargo polylith cargo test        # test with dev profile");
+    println!("  cargo polylith cargo --profile <name> build  # build with a named profile");
+
+    Ok(())
+}
+
 pub fn run_cargo(profile_name: &str, cargo_args: &[String], workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
@@ -79,7 +162,13 @@ pub fn run_cargo(profile_name: &str, cargo_args: &[String], workspace_root: Opti
     let profile = profiles
         .into_iter()
         .find(|p| p.name == profile_name)
-        .with_context(|| format!("profile '{}' not found in profiles/", profile_name))?;
+        .with_context(|| {
+            if profile_name == "dev" {
+                "no dev profile found — run `cargo polylith profile migrate` to set one up".to_string()
+            } else {
+                format!("profile '{}' not found in profiles/", profile_name)
+            }
+        })?;
 
     let resolved = resolve_profile_workspace(&root, &profile, &map);
     let generated = crate::scaffold::write_profile_workspace(&root, &resolved)?;
