@@ -121,7 +121,6 @@ the user before creating or modifying workspace structure.
 | `polylith_base_update` | Toggle a base between sharp and test-base mode | `name`; optional `test_base` (bool, default false) |
 | `polylith_project_new` | Create project workspace under `projects/<name>/` | `name` |
 | `polylith_component_update` | Set or update interface annotation on existing component | `name`, `interface` |
-| `polylith_set_implementation` | Wire a component implementation into a project | `project`, `interface`, `implementation` |
 | `polylith_profile_list` | List defined profiles and their interface-to-implementation mappings | — |
 | `polylith_profile_new` | Create a new empty profile | `name` |
 | `polylith_profile_add` | Add or update one mapping in a profile | `profile`, `interface`, `implementation` |
@@ -134,7 +133,6 @@ cargo polylith component new <name> [--interface <iface>]
 cargo polylith base new <name>
 cargo polylith base update <name> [--test-base]
 cargo polylith project new <name>
-cargo polylith project set-impl <project> <interface> --implementation <name>
 cargo polylith profile new <name>
 ```
 

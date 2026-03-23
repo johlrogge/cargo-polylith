@@ -41,9 +41,6 @@ fn main() {
             use cli::ProjectAction;
             match action {
                 ProjectAction::New { name } => commands::project::new(&name, workspace_root),
-                ProjectAction::SetImpl { project, interface, implementation } => {
-                    commands::project::set_impl(&project, &interface, &implementation, workspace_root)
-                }
             }
         }
         PolylithCommand::Deps { component, json } => {
