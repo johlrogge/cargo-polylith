@@ -528,6 +528,164 @@ pub fn demote_root_workspace(root: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
+/// Strip `{ workspace = true }` references from all brick `Cargo.toml` files
+/// under `components/` and `bases/`, replacing them with explicit values from
+/// `polylith_toml`. Returns the number of bricks rewritten.
+pub fn strip_workspace_inheritance(
+    root: &Path,
+    polylith_toml: &crate::workspace::PolylithToml,
+) -> Result<usize> {
+    let mut count = 0;
+    for kind_dir in &["components", "bases"] {
+        let dir = root.join(kind_dir);
+        if !dir.exists() {
+            continue;
+        }
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let manifest_path = entry.path().join("Cargo.toml");
+            if !manifest_path.exists() {
+                continue;
+            }
+            let changed = strip_workspace_from_manifest(&manifest_path, polylith_toml)?;
+            if changed {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+/// Rewrite a single brick `Cargo.toml`, replacing `{ workspace = true }` fields
+/// with explicit values from `polylith_toml`. Returns `true` if the file was changed.
+fn strip_workspace_from_manifest(
+    manifest_path: &Path,
+    polylith_toml: &crate::workspace::PolylithToml,
+) -> Result<bool> {
+    let content = fs::read_to_string(manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let mut doc: DocumentMut = content.parse()
+        .with_context(|| format!("parsing {}", manifest_path.display()))?;
+
+    let mut changed = false;
+
+    // -- Package metadata fields --
+    let pkg_meta = polylith_toml.workspace_package.as_ref();
+
+    // We process fields: version, edition, authors, license, repository
+    // We need to check if they are `{ workspace = true }` or dotted-key form.
+    let pkg_fields: &[(&str, Option<String>)] = &[
+        ("version", pkg_meta.and_then(|m| m.version.clone())),
+        ("edition", pkg_meta.and_then(|m| m.edition.clone())),
+        ("license", pkg_meta.and_then(|m| m.license.clone())),
+        ("repository", pkg_meta.and_then(|m| m.repository.clone())),
+    ];
+
+    for (field, maybe_value) in pkg_fields {
+        if is_workspace_true_item(doc.get("package").and_then(|p| p.get(field))) {
+            if let Some(val) = maybe_value {
+                doc["package"][field] = toml_edit::value(val.as_str());
+                changed = true;
+            }
+        }
+    }
+
+    // Handle authors separately (it's an array)
+    if is_workspace_true_item(doc.get("package").and_then(|p| p.get("authors"))) {
+        if let Some(meta) = pkg_meta {
+            if !meta.authors.is_empty() {
+                let mut arr = toml_edit::Array::new();
+                for author in &meta.authors {
+                    arr.push(author.as_str());
+                }
+                doc["package"]["authors"] = toml_edit::value(arr);
+                changed = true;
+            }
+        }
+    }
+
+    // -- Dependency tables --
+    let dep_tables = ["dependencies", "dev-dependencies", "build-dependencies"];
+    for table_name in &dep_tables {
+        // Collect dep names that need to be rewritten (borrow ends before mutation)
+        let dep_names: Vec<String> = doc
+            .get(table_name)
+            .and_then(|t| t.as_table())
+            .map(|t| {
+                t.iter()
+                    .filter(|(_, v)| is_workspace_true_item(Some(v)))
+                    .map(|(k, _)| k.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for dep_name in dep_names {
+            // Look up in polylith_toml.libraries
+            if let Some(lib_info) = polylith_toml.libraries.get(&dep_name) {
+                let new_val = if lib_info.features.is_empty() {
+                    // Simple version string
+                    if let Some(ver) = &lib_info.version {
+                        toml_edit::Item::Value(toml_edit::Value::from(ver.as_str()))
+                    } else {
+                        // No version to substitute — leave unchanged
+                        eprintln!(
+                            "warning: dep '{}' uses workspace = true but Polylith.toml has no version — left unchanged",
+                            dep_name
+                        );
+                        continue;
+                    }
+                } else {
+                    // Inline table with version and features
+                    let mut tbl = toml_edit::InlineTable::new();
+                    if let Some(ver) = &lib_info.version {
+                        tbl.insert("version", toml_edit::Value::from(ver.as_str()));
+                    }
+                    let mut features_arr = toml_edit::Array::new();
+                    for feat in &lib_info.features {
+                        features_arr.push(feat.as_str());
+                    }
+                    tbl.insert("features", toml_edit::Value::Array(features_arr));
+                    toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl))
+                };
+                doc[table_name][&dep_name] = new_val;
+                changed = true;
+            } else {
+                eprintln!(
+                    "warning: dep '{}' uses workspace = true but is not in Polylith.toml [libraries] — left unchanged",
+                    dep_name
+                );
+            }
+        }
+    }
+
+    if changed {
+        fs::write(manifest_path, doc.to_string())
+            .with_context(|| format!("writing {}", manifest_path.display()))?;
+    }
+    Ok(changed)
+}
+
+/// Return `true` if the given `toml_edit::Item` is `{ workspace = true }` — either
+/// as a dotted key table (`version.workspace = true`) or an inline table.
+fn is_workspace_true_item(item: Option<&toml_edit::Item>) -> bool {
+    let item = match item {
+        Some(i) => i,
+        None => return false,
+    };
+    // Inline table: `dep = { workspace = true }`
+    if let Some(it) = item.as_value().and_then(|v| v.as_inline_table()) {
+        return it.get("workspace").and_then(|v| v.as_bool()) == Some(true);
+    }
+    // Regular/dotted-key table: `dep.workspace = true` becomes a table with key "workspace"
+    if let Some(t) = item.as_table() {
+        return t.get("workspace").and_then(|v| v.as_value()).and_then(|v| v.as_bool()) == Some(true);
+    }
+    false
+}
+
 /// Render a toml_edit `Item` value as a TOML inline string (for Polylith.toml [libraries]).
 fn render_dep_value(val: &toml_edit::Item) -> String {
     // Bare string (version only)

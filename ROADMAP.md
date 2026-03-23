@@ -54,7 +54,33 @@ Profile files (`profiles/<name>.profile`) declare implementation overrides and e
 MCP server (`cargo polylith mcp serve`) ✅ — read-only and write tools,
 stdin/stdout JSON-RPC transport, wires directly into Claude Code and other MCP clients.
 
-## Next — model alignment
+## Next
+
+### `profile migrate` — strip workspace inheritance from bricks
+
+After `Polylith.toml` is created and `[workspace]` is removed from root, bricks that use
+`{ workspace = true }` or `version.workspace = true` can no longer resolve against a root
+workspace. The migration must also rewrite each brick's `Cargo.toml` to use explicit values
+sourced from `Polylith.toml`:
+
+- `version.workspace = true` → explicit version from `Polylith.toml [workspace.package]`
+- `edition.workspace = true` → explicit edition
+- `dep = { workspace = true }` → explicit `dep = { version = "...", features = [...] }` from `Polylith.toml [libraries]`
+- Path deps and non-workspace deps are left unchanged
+
+Bricks become fully self-contained. Profile workspaces claim them as members with no
+workspace-ancestry conflict. Swappable interface deps use explicit path deps wired via the
+profile workspace's `[workspace.dependencies]`.
+
+### Future: `cargo polylith change-profile <profile>` (Option C)
+
+When bricks need `{ workspace = true }` for swappable interface deps, profiles cannot be
+separate workspaces (Cargo's walk-up makes bricks always resolve against their ancestor
+workspace, not the profile workspace). Option C defers this: `change-profile` generates
+and commits the root `Cargo.toml` from a profile — the active profile is always the real
+Cargo workspace. No RAII restore needed; the swap is intentional and committed.
+
+## Next — model alignment (legacy)
 
 ### ✅ Model correction: projects as bin crates, workspace as profile
 
