@@ -74,7 +74,7 @@ pre-check on public symbol names.
 | Concept | Clojure polylith | cargo-polylith | Why |
 |---|---|---|---|
 | **Interface declaration** | Namespace structure — components implement an interface by having the same namespace | `[package.metadata.polylith] interface = "..."` in Cargo.toml | Rust has no namespace-based interface; explicit metadata is unambiguous and prevents typos from creating phantom interfaces |
-| **Profile / implementation switching** | Named profiles in `deps.edn` select which source directories are compiled in | Named profiles stored in `profiles/<name>.profile`; `profile build` generates a standalone workspace Cargo.toml applying the profile's implementation overrides | Mirrors Clojure polylith's profile concept — `[workspace.dependencies]` is the wiring diagram, profiles override specific entries for different build targets |
+| **Profile / implementation switching** | Named profiles in `deps.edn` select which source directories are compiled in | Named profiles stored in `profiles/<name>.profile`; `cargo polylith cargo --profile <name> <subcommand>` generates a standalone workspace applying the profile's implementation overrides and delegates to cargo. Swapping works at the brick level — one component can depend on another via a named interface, and the profile selects which implementing brick is compiled in. | Mirrors Clojure polylith's profile concept — `[workspace.dependencies]` is the wiring diagram, profiles override specific entries for different build targets |
 | **Development project** | A dedicated `development/` project at the workspace root | The root workspace itself | Cargo's workspace model is already the right structure; no separate project needed |
 | **Stub-first development** | Default profile uses the primary implementation | Root workspace uses lightweight/stub components by default; projects select production-grade implementations via path deps | Enables fast tests without heavy deps (PipeWire, file scanning, sha2, etc.) |
 | **Test/dev projects** | The development project has no base requirement | Projects in `projects/` that are test or development harnesses do not require a base dependency | A test runner is an entry point in its own right; forcing a base dependency would be artificial |
@@ -136,7 +136,7 @@ cargo polylith check
 # 8. Work with profiles (optional — for named implementation sets)
 cargo polylith profile add http-client --impl components/http-client-real --profile production
 cargo polylith profile list
-cargo polylith profile build production
+cargo polylith cargo --profile production build
 ```
 
 ---
@@ -408,11 +408,13 @@ cargo polylith profile list --json
 Flags:
 - `--json` — machine-readable output
 
-#### `cargo polylith profile build <name>`
+#### `cargo polylith profile build <name>` (deprecated)
 
 Generates `profiles/<name>/Cargo.toml` — a standalone profile workspace manifest
 that applies the named profile's implementation overrides to the root `[workspace.dependencies]`.
 Optionally invokes `cargo build` inside that generated workspace.
+
+Deprecated in favour of `cargo polylith cargo --profile <name> build`.
 
 ```
 cargo polylith profile build production
@@ -433,6 +435,26 @@ cargo polylith profile add http-client \
 ```
 
 Creates `profiles/<name>.profile` if it does not exist.
+
+---
+
+### `cargo polylith cargo --profile <name> <subcommand...>`
+
+Generates the profile workspace and delegates to cargo with `--manifest-path`.
+Accepts any cargo subcommand and trailing flags.
+
+```
+cargo polylith cargo --profile production build
+cargo polylith cargo --profile dev test
+cargo polylith cargo --profile production clippy -- -D warnings
+```
+
+The profile workspace is regenerated before each invocation. Only the bricks
+transitively needed by the profile's selected implementations are included —
+alternative implementations of the same interface are excluded. This enables
+correct component-to-component swapping: if a component depends on
+`fact-store = { workspace = true }`, the profile controls which implementation
+`fact-store` resolves to.
 
 ---
 

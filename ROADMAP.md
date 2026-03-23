@@ -2,6 +2,17 @@
 
 ## Shipped
 
+### 0.7.1 — Profile BFS transitive closure, `cargo polylith cargo` ✅
+
+- `resolve_profile_workspace` now uses BFS transitive closure — only bricks transitively needed by the profile's selected implementations are included in the generated workspace. Alternative implementations of the same interface are excluded, enabling correct component-to-component swapping (e.g. a component that depends on `fact-store = { workspace = true }` — the profile controls which implementation `fact-store` resolves to).
+- `cargo polylith cargo --profile <name> <subcommand...>` — generates the profile workspace and delegates to cargo with `--manifest-path`. Accepts any cargo subcommand and trailing flags:
+  ```
+  cargo polylith cargo --profile production build
+  cargo polylith cargo --profile dev test
+  cargo polylith cargo --profile production clippy -- -D warnings
+  ```
+- `cargo polylith profile build <name>` is deprecated in favour of the new `cargo` subcommand.
+
 ### 0.7.0 — Base update, project set-impl, profile new, MCP expansion, ADRs ✅
 
 Commands and tooling:
@@ -18,7 +29,7 @@ Commands and tooling:
 Named implementation sets that mirror the Clojure polylith profiles concept.
 
 - `cargo polylith profile list [--json]` — lists all profiles and their selections
-- `cargo polylith profile build <name> [--no-build]` — generates `profiles/<name>/Cargo.toml` (a standalone workspace applying the profile's overrides) and optionally runs `cargo build`
+- `cargo polylith profile build <name> [--no-build]` — generates `profiles/<name>/Cargo.toml` (a standalone workspace applying the profile's overrides) and optionally runs `cargo build` (deprecated — use `cargo polylith cargo --profile <name> build` instead)
 - `cargo polylith profile add <interface> --impl <path> --profile <name>` — adds or updates an implementation selection in a `.profile` file
 - `cargo polylith check --profile <name>` — validates a named profile's implementation paths
 - New check warnings: `hardwired-dep`, `profile-impl-not-found`, `profile-impl-not-component`
