@@ -2,6 +2,28 @@
 
 ## Shipped
 
+### 0.8.3 — Profile workspaces use symlinks (Option D) ✅
+
+Cargo 1.94+ requires workspace members to be hierarchically below the workspace root,
+making `../../components/foo` member paths in `profiles/dev/Cargo.toml` invalid.
+
+**Solution chosen (Option D):** profile directories contain symlinks that make the root
+brick directories appear below the profile workspace root:
+
+```
+profiles/dev/
+  components -> ../../components   (symlink)
+  bases      -> ../../bases        (symlink)
+  projects   -> ../../projects     (symlink)
+  Cargo.toml                       (generated; members use clean paths: "components/foo")
+```
+
+- `cargo polylith cargo --profile dev check` works correctly with the symlinked layout
+- `cargo polylith profile migrate` now generates the symlinked layout
+- `profile migrate` also strips `{ workspace = true }` from brick `Cargo.toml`s
+- Recommended dev workflow: `cd profiles/dev && cargo check` or `cargo polylith cargo check`
+- `Polylith.toml` introduced as the workspace root marker (library versions, workspace.package metadata)
+
 ### 0.8.1 — `cargo polylith cargo` dev default, `profile migrate` ✅
 
 - `cargo polylith cargo` now defaults `--profile` to `dev` when the flag is omitted. If no dev profile exists, prints: `no dev profile found — run 'cargo polylith profile migrate' to set one up`.
@@ -54,7 +76,9 @@ Profile files (`profiles/<name>.profile`) declare implementation overrides and e
 MCP server (`cargo polylith mcp serve`) ✅ — read-only and write tools,
 stdin/stdout JSON-RPC transport, wires directly into Claude Code and other MCP clients.
 
-## Next — model alignment
+## Next
+
+## Next — model alignment (legacy)
 
 ### ✅ Model correction: projects as bin crates, workspace as profile
 

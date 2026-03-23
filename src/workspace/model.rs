@@ -5,6 +5,26 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+/// Shared package metadata from `[workspace.package]` in `Polylith.toml`.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspacePackageMeta {
+    pub version: Option<String>,
+    pub edition: Option<String>,
+    pub authors: Vec<String>,
+    pub license: Option<String>,
+    pub repository: Option<String>,
+}
+
+/// Contents of `Polylith.toml` — the polylith workspace root marker.
+#[derive(Debug, Clone, Serialize)]
+pub struct PolylithToml {
+    pub schema_version: u32,
+    pub workspace_package: Option<WorkspacePackageMeta>,
+    pub libraries: HashMap<String, ExternalDepInfo>,
+    /// Maps profile name → relative path to `.profile` file.
+    pub profiles: HashMap<String, String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrickKind {
@@ -31,8 +51,11 @@ pub struct Brick {
 pub struct ExternalDepInfo {
     /// Sorted list of enabled features.
     pub features: Vec<String>,
-    /// Version string, if present (None for `{ workspace = true }` or version-less entries).
+    /// Version string, if present (None for git deps, path deps, etc.).
     pub version: Option<String>,
+    /// Raw TOML dep value as written in [libraries] (e.g. `{ git = "...", rev = "..." }`).
+    /// Used when `version` is None to emit the dep verbatim during workspace stripping.
+    pub raw: Option<String>,
 }
 
 /// A path dependency declared in `[workspace.dependencies]` — the interface wiring diagram.
@@ -95,6 +118,8 @@ pub struct WorkspaceMap {
     /// Path deps declared in root `[workspace.dependencies]` — the interface wiring diagram.
     /// Maps dep key (interface name) → path + optional package alias.
     pub root_workspace_interface_deps: HashMap<String, WorkspacePathDep>,
+    /// Parsed `Polylith.toml` if present at root, `None` for legacy workspaces.
+    pub polylith_toml: Option<PolylithToml>,
 }
 
 /// The fully resolved data needed to generate a profile workspace Cargo.toml.
@@ -110,4 +135,6 @@ pub struct ResolvedProfileWorkspace {
     pub interface_dep_lines: Vec<String>,
     /// Library dep lines, fully rendered for [workspace.dependencies].
     pub library_dep_lines: Vec<String>,
+    /// Shared package metadata from `Polylith.toml [workspace.package]`, if present.
+    pub workspace_package: Option<WorkspacePackageMeta>,
 }

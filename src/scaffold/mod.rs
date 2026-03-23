@@ -198,7 +198,11 @@ fn relative_path(from_dir: &Path, to_dir: &Path) -> std::path::PathBuf {
 
 /// Write a profile workspace Cargo.toml from pre-resolved profile data.
 ///
-/// Creates `profiles/<name>/Cargo.toml` at the workspace root.
+/// Creates `profiles/<name>/Cargo.toml` at the workspace root, plus symlinks
+/// `profiles/<name>/components`, `profiles/<name>/bases`, and
+/// `profiles/<name>/projects` pointing to the real source directories at the
+/// workspace root (only when those directories exist).
+///
 /// Returns the path to the generated file.
 pub fn write_profile_workspace(
     root: &Path,
@@ -207,6 +211,33 @@ pub fn write_profile_workspace(
     let profile_dir = root.join("profiles").join(&resolved.profile_name);
     fs::create_dir_all(&profile_dir)
         .with_context(|| format!("creating {}", profile_dir.display()))?;
+
+    // Create symlinks for each top-level brick directory that exists at root.
+    // The symlink target is relative (../../<dir>) so it works regardless of
+    // where the workspace is checked out.
+    for dir_name in &["components", "bases", "projects"] {
+        let src = root.join(dir_name);
+        if src.exists() {
+            let link = profile_dir.join(dir_name);
+            if link.exists() || link.is_symlink() {
+                // Already present — skip (idempotent).
+            } else {
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(
+                    format!("../../{dir_name}"),
+                    &link,
+                )
+                .with_context(|| format!("creating symlink {}", link.display()))?;
+                #[cfg(not(unix))]
+                {
+                    // On non-Unix platforms symlinks require elevated privileges;
+                    // skip silently and let the user create them manually if needed.
+                    let _ = link;
+                }
+            }
+        }
+    }
+
     let out_path = profile_dir.join("Cargo.toml");
 
     let member_lines = resolved
@@ -218,6 +249,35 @@ pub fn write_profile_workspace(
 
     let mut dep_lines = resolved.interface_dep_lines.clone();
     dep_lines.extend(resolved.library_dep_lines.iter().cloned());
+
+    // Build [workspace.package] section if workspace_package is set
+    let pkg_section = if let Some(pkg) = &resolved.workspace_package {
+        let mut lines = vec!["[workspace.package]".to_string()];
+        if let Some(v) = &pkg.version {
+            lines.push(format!("version = \"{}\"", v));
+        }
+        if let Some(e) = &pkg.edition {
+            lines.push(format!("edition = \"{}\"", e));
+        }
+        if !pkg.authors.is_empty() {
+            let authors_list = pkg
+                .authors
+                .iter()
+                .map(|a| format!("\"{}\"", a))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("authors = [{}]", authors_list));
+        }
+        if let Some(l) = &pkg.license {
+            lines.push(format!("license = \"{}\"", l));
+        }
+        if let Some(r) = &pkg.repository {
+            lines.push(format!("repository = \"{}\"", r));
+        }
+        format!("\n{}\n", lines.join("\n"))
+    } else {
+        String::new()
+    };
 
     let deps_section = if dep_lines.is_empty() {
         String::new()
@@ -234,9 +294,10 @@ pub fn write_profile_workspace(
          {members}\n\
          ]\n\
          resolver = \"2\"\n\
-         {deps}",
+         {pkg}{deps}",
         name = resolved.profile_name,
         members = member_lines,
+        pkg = pkg_section,
         deps = deps_section,
     );
 
@@ -323,25 +384,453 @@ pub fn create_dev_profile_from_deps(root: &Path, impls: &[(String, String)]) -> 
 
 /// Read root `Cargo.toml` with `toml_edit`, set `[workspace].members` to an empty array,
 /// and write back. Preserves all other content (including `[workspace.dependencies]`).
+#[allow(dead_code)]
 pub fn clear_root_members(root: &Path) -> Result<()> {
     let manifest_path = root.join("Cargo.toml");
     let content = fs::read_to_string(&manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
     let mut doc: DocumentMut = content.parse().context("parsing root Cargo.toml")?;
 
-    // Clear by removing all entries from the existing array to preserve formatting,
-    // falling back to replacing with a fresh empty array.
+    // Clear members in place to preserve formatting.
     if let Some(members) = doc["workspace"]["members"].as_array_mut() {
-        // Clear all entries in place, preserving the array's position and formatting
         members.clear();
     } else {
         doc["workspace"]["members"] = toml_edit::array();
+    }
+
+
+    fs::write(&manifest_path, doc.to_string())
+        .with_context(|| format!("writing {}", manifest_path.display()))?;
+
+    Ok(())
+}
+
+/// Demote the root workspace:
+/// 1. Extracts `[workspace.package]` and non-path `[workspace.dependencies]` from `Cargo.toml`
+/// 2. Discovers existing profile names from `profiles/*.profile`
+/// 3. Writes `Polylith.toml` with the extracted metadata
+/// 4. Removes the entire `[workspace]` table from root `Cargo.toml`
+///
+/// If `Polylith.toml` already exists and `!force`, returns an error.
+pub fn demote_root_workspace(root: &Path, force: bool) -> Result<()> {
+    let polylith_toml_path = root.join("Polylith.toml");
+    if polylith_toml_path.exists() && !force {
+        anyhow::bail!(
+            "Polylith.toml already exists at {} — use --force to overwrite",
+            polylith_toml_path.display()
+        );
+    }
+
+    let manifest_path = root.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let mut doc: DocumentMut = content.parse().context("parsing root Cargo.toml")?;
+
+    // Extract [workspace.package] fields
+    let version = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let edition = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("edition"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let authors: Vec<String> = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("authors"))
+        .and_then(|v| v.as_value())
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    let license = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("license"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let repository = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("repository"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let has_package_meta = version.is_some() || edition.is_some() || !authors.is_empty()
+        || license.is_some() || repository.is_some();
+
+    // Extract non-path deps from [workspace.dependencies]
+    let mut libraries: Vec<(String, String)> = vec![];
+    if let Some(ws_deps) = doc
+        .get("workspace")
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        let mut sorted_keys: Vec<String> = ws_deps.iter().map(|(k, _)| k.to_string()).collect();
+        sorted_keys.sort();
+        for key in &sorted_keys {
+            if let Some(val) = ws_deps.get(key.as_str()) {
+                // Skip path deps
+                let has_path = val.as_value().and_then(|v| v.as_inline_table()).and_then(|it| it.get("path")).is_some()
+                    || val.as_table().and_then(|t| t.get("path")).is_some();
+                if has_path {
+                    continue;
+                }
+                // Render the dep value as a TOML inline expression
+                let rendered = render_dep_value(val);
+                libraries.push((key.clone(), rendered));
+            }
+        }
+    }
+
+    // Discover existing profile names from profiles/*.profile
+    let profiles_dir = root.join("profiles");
+    let mut profile_names: Vec<String> = vec![];
+    if profiles_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&profiles_dir) {
+            let mut names: Vec<String> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path().extension().and_then(|ext| ext.to_str()) == Some("profile")
+                })
+                .filter_map(|e| {
+                    e.path()
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                })
+                .collect();
+            names.sort();
+            profile_names = names;
+        }
+    }
+
+    // Build Polylith.toml content
+    let mut polylith_content = String::new();
+    polylith_content.push_str("[workspace]\n");
+    polylith_content.push_str("schema_version = 1\n");
+
+    if has_package_meta {
+        polylith_content.push_str("\n[workspace.package]\n");
+        if let Some(v) = &version {
+            polylith_content.push_str(&format!("version = \"{}\"\n", v));
+        }
+        if let Some(e) = &edition {
+            polylith_content.push_str(&format!("edition = \"{}\"\n", e));
+        }
+        if !authors.is_empty() {
+            let authors_list = authors.iter().map(|a| format!("\"{}\"", a)).collect::<Vec<_>>().join(", ");
+            polylith_content.push_str(&format!("authors = [{}]\n", authors_list));
+        }
+        if let Some(l) = &license {
+            polylith_content.push_str(&format!("license = \"{}\"\n", l));
+        }
+        if let Some(r) = &repository {
+            polylith_content.push_str(&format!("repository = \"{}\"\n", r));
+        }
+    }
+
+    if !libraries.is_empty() {
+        polylith_content.push_str("\n[libraries]\n");
+        for (key, val) in &libraries {
+            polylith_content.push_str(&format!("{} = {}\n", key, val));
+        }
+    }
+
+    if !profile_names.is_empty() {
+        polylith_content.push_str("\n[profiles]\n");
+        for name in &profile_names {
+            polylith_content.push_str(&format!("{} = \"profiles/{}.profile\"\n", name, name));
+        }
+    }
+
+    fs::write(&polylith_toml_path, &polylith_content)
+        .with_context(|| format!("writing {}", polylith_toml_path.display()))?;
+
+    // Remove [workspace] from root Cargo.toml entirely
+    doc.remove("workspace");
+
+    // Ensure the root Cargo.toml has a [package] section so Cargo can parse it.
+    // Without [package] or [workspace], Cargo errors when walking up from bricks.
+    // A dummy unpublished package is fine — Cargo walks past it (no [workspace])
+    // so profile workspaces can still claim the bricks as members.
+    if doc.get("package").is_none() {
+        let mut pkg = toml_edit::table();
+        pkg["name"] = toml_edit::value("workspace-root");
+        pkg["version"] = toml_edit::value("0.0.0");
+        pkg["edition"] = toml_edit::value("2021");
+        pkg["publish"] = toml_edit::value(false);
+        doc.insert("package", pkg);
+        // Create an empty src/lib.rs so Cargo finds a valid target for this package.
+        let src_dir = root.join("src");
+        fs::create_dir_all(&src_dir).with_context(|| format!("creating {}", src_dir.display()))?;
+        let lib_rs = src_dir.join("lib.rs");
+        if !lib_rs.exists() {
+            fs::write(&lib_rs, "// Polylith workspace root placeholder — do not edit.\n")
+                .with_context(|| format!("writing {}", lib_rs.display()))?;
+        }
     }
 
     fs::write(&manifest_path, doc.to_string())
         .with_context(|| format!("writing {}", manifest_path.display()))?;
 
     Ok(())
+}
+
+/// Strip `{ workspace = true }` references from all brick `Cargo.toml` files
+/// under `components/` and `bases/`, replacing them with explicit values from
+/// `polylith_toml`. Inter-brick deps (path deps to other components/bases) are
+/// converted to explicit path deps using `interface_impls`.
+/// Returns the number of bricks rewritten.
+pub fn strip_workspace_inheritance(
+    root: &Path,
+    polylith_toml: &crate::workspace::PolylithToml,
+    interface_impls: &[(String, String)],
+) -> Result<usize> {
+    // Build a HashMap for O(1) lookup: interface_key -> path_relative_to_root
+    let impl_map: std::collections::HashMap<&str, &str> = interface_impls
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    let mut count = 0;
+    for kind_dir in &["components", "bases", "projects"] {
+        let dir = root.join(kind_dir);
+        if !dir.exists() {
+            continue;
+        }
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let manifest_path = entry.path().join("Cargo.toml");
+            if !manifest_path.exists() {
+                continue;
+            }
+            let changed = strip_workspace_from_manifest(&manifest_path, polylith_toml, &impl_map, root)?;
+            if changed {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+/// Rewrite a single brick `Cargo.toml`, replacing `{ workspace = true }` fields
+/// with explicit values from `polylith_toml`. Inter-brick workspace deps are
+/// converted to explicit path deps using `impl_map`. Returns `true` if the file was changed.
+fn strip_workspace_from_manifest(
+    manifest_path: &Path,
+    polylith_toml: &crate::workspace::PolylithToml,
+    impl_map: &std::collections::HashMap<&str, &str>,
+    root: &Path,
+) -> Result<bool> {
+    let content = fs::read_to_string(manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let mut doc: DocumentMut = content.parse()
+        .with_context(|| format!("parsing {}", manifest_path.display()))?;
+
+    let mut changed = false;
+
+    // -- Package metadata fields --
+    let pkg_meta = polylith_toml.workspace_package.as_ref();
+
+    // We process fields: version, edition, authors, license, repository
+    // We need to check if they are `{ workspace = true }` or dotted-key form.
+    let pkg_fields: &[(&str, Option<String>)] = &[
+        ("version", pkg_meta.and_then(|m| m.version.clone())),
+        ("edition", pkg_meta.and_then(|m| m.edition.clone())),
+        ("license", pkg_meta.and_then(|m| m.license.clone())),
+        ("repository", pkg_meta.and_then(|m| m.repository.clone())),
+    ];
+
+    for (field, maybe_value) in pkg_fields {
+        if is_workspace_true_item(doc.get("package").and_then(|p| p.get(field))) {
+            if let Some(val) = maybe_value {
+                doc["package"][field] = toml_edit::value(val.as_str());
+                changed = true;
+            }
+        }
+    }
+
+    // Handle authors separately (it's an array)
+    if is_workspace_true_item(doc.get("package").and_then(|p| p.get("authors"))) {
+        if let Some(meta) = pkg_meta {
+            if !meta.authors.is_empty() {
+                let mut arr = toml_edit::Array::new();
+                for author in &meta.authors {
+                    arr.push(author.as_str());
+                }
+                doc["package"]["authors"] = toml_edit::value(arr);
+                changed = true;
+            }
+        }
+    }
+
+    // -- Dependency tables --
+    let dep_tables = ["dependencies", "dev-dependencies", "build-dependencies"];
+    for table_name in &dep_tables {
+        // Collect dep names that need to be rewritten (borrow ends before mutation)
+        let dep_names: Vec<String> = doc
+            .get(table_name)
+            .and_then(|t| t.as_table())
+            .map(|t| {
+                t.iter()
+                    .filter(|(_, v)| is_workspace_true_item(Some(v)))
+                    .map(|(k, _)| k.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for dep_name in dep_names {
+            // Look up in polylith_toml.libraries
+            if let Some(lib_info) = polylith_toml.libraries.get(&dep_name) {
+                let new_val = if lib_info.features.is_empty() {
+                    if let Some(ver) = &lib_info.version {
+                        // Simple version string
+                        toml_edit::Item::Value(toml_edit::Value::from(ver.as_str()))
+                    } else if let Some(raw) = &lib_info.raw {
+                        // Non-version dep (git, etc.) — parse the raw TOML value
+                        match raw.parse::<toml_edit::Value>() {
+                            Ok(v) => toml_edit::Item::Value(v),
+                            Err(_) => {
+                                eprintln!("warning: dep '{}' — could not parse raw value from Polylith.toml, left unchanged", dep_name);
+                                continue;
+                            }
+                        }
+                    } else {
+                        eprintln!("warning: dep '{}' uses workspace = true but Polylith.toml has no version — left unchanged", dep_name);
+                        continue;
+                    }
+                } else {
+                    // Inline table with version and features
+                    let mut tbl = toml_edit::InlineTable::new();
+                    if let Some(ver) = &lib_info.version {
+                        tbl.insert("version", toml_edit::Value::from(ver.as_str()));
+                    }
+                    let mut features_arr = toml_edit::Array::new();
+                    for feat in &lib_info.features {
+                        features_arr.push(feat.as_str());
+                    }
+                    tbl.insert("features", toml_edit::Value::Array(features_arr));
+                    toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl))
+                };
+                doc[table_name][&dep_name] = new_val;
+                changed = true;
+            } else if let Some(impl_path) = impl_map.get(dep_name.as_str()) {
+                // Inter-brick dep: convert to explicit path dep, preserving other attributes
+                let brick_dir = manifest_path.parent().unwrap();
+                let target_dir = root.join(impl_path);
+                let rel = relative_path(brick_dir, &target_dir);
+                let existing = doc[table_name].get(&dep_name).cloned();
+                let mut tbl = toml_edit::InlineTable::new();
+                tbl.insert("path", toml_edit::Value::from(rel.to_string_lossy().as_ref()));
+                // Preserve other attributes (optional, package, features, default-features)
+                for key in &["optional", "package", "features", "default-features"] {
+                    let val = existing.as_ref().and_then(|it| {
+                        it.as_value()
+                            .and_then(|v| v.as_inline_table())
+                            .and_then(|t| t.get(key))
+                            .or_else(|| {
+                                it.as_table()
+                                    .and_then(|t| t.get(key))
+                                    .and_then(|v| v.as_value())
+                            })
+                    });
+                    if let Some(v) = val {
+                        tbl.insert(*key, v.clone());
+                    }
+                }
+                doc[table_name][&dep_name] = toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl));
+                changed = true;
+            } else {
+                eprintln!(
+                    "warning: dep '{}' uses workspace = true but is not in Polylith.toml [libraries] or [implementations] — left unchanged",
+                    dep_name
+                );
+            }
+        }
+    }
+
+    if changed {
+        fs::write(manifest_path, doc.to_string())
+            .with_context(|| format!("writing {}", manifest_path.display()))?;
+    }
+    Ok(changed)
+}
+
+/// Return `true` if the given `toml_edit::Item` is `{ workspace = true }` — either
+/// as a dotted key table (`version.workspace = true`) or an inline table.
+fn is_workspace_true_item(item: Option<&toml_edit::Item>) -> bool {
+    let item = match item {
+        Some(i) => i,
+        None => return false,
+    };
+    // Inline table: `dep = { workspace = true }`
+    if let Some(it) = item.as_value().and_then(|v| v.as_inline_table()) {
+        return it.get("workspace").and_then(|v| v.as_bool()) == Some(true);
+    }
+    // Regular/dotted-key table: `dep.workspace = true` becomes a table with key "workspace"
+    if let Some(t) = item.as_table() {
+        return t.get("workspace").and_then(|v| v.as_value()).and_then(|v| v.as_bool()) == Some(true);
+    }
+    false
+}
+
+/// Render a toml_edit `Item` value as a TOML inline string (for Polylith.toml [libraries]).
+fn render_dep_value(val: &toml_edit::Item) -> String {
+    // Bare string (version only)
+    if let Some(s) = val.as_value().and_then(|v| v.as_str()) {
+        return format!("\"{}\"", s);
+    }
+    // Inline table
+    if let Some(it) = val.as_value().and_then(|v| v.as_inline_table()) {
+        let pairs: Vec<String> = it
+            .iter()
+            .map(|(k, v)| {
+                if let Some(s) = v.as_str() {
+                    format!("{} = \"{}\"", k, s)
+                } else if let Some(arr) = v.as_array() {
+                    let items: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| format!("\"{}\"", s))
+                        .collect();
+                    format!("{} = [{}]", k, items.join(", "))
+                } else {
+                    format!("{} = {}", k, v)
+                }
+            })
+            .collect();
+        return format!("{{ {} }}", pairs.join(", "));
+    }
+    // Regular table
+    if let Some(t) = val.as_table() {
+        let pairs: Vec<String> = t
+            .iter()
+            .map(|(k, v)| {
+                if let Some(s) = v.as_value().and_then(|v| v.as_str()) {
+                    format!("{} = \"{}\"", k, s)
+                } else if let Some(arr) = v.as_value().and_then(|v| v.as_array()) {
+                    let items: Vec<String> = arr
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| format!("\"{}\"", s))
+                        .collect();
+                    format!("{} = [{}]", k, items.join(", "))
+                } else {
+                    format!("{} = {}", k, v)
+                }
+            })
+            .collect();
+        return format!("{{ {} }}", pairs.join(", "));
+    }
+    // Fallback
+    val.to_string()
 }
 
 /// Append a member path to the root workspace `Cargo.toml` `[workspace].members` array

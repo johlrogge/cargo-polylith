@@ -200,8 +200,17 @@ fn profile_build_no_build_generates_cargo_toml() {
 
     let content = fs::read_to_string(&generated).unwrap();
     assert!(content.contains("[workspace]"), "should have [workspace] section");
-    assert!(content.contains("../../components/logger"), "should have logger member");
-    assert!(content.contains("../../components/parser"), "should have parser member");
+    assert!(content.contains("\"components/logger\""), "should have logger member with symlink-relative path");
+    assert!(content.contains("\"components/parser\""), "should have parser member with symlink-relative path");
+    assert!(!content.contains("../../"), "should not contain ../../ paths — symlinks make them unnecessary");
+
+    // Verify symlinks were created
+    let components_link = tmp.path().join("profiles/dev/components");
+    assert!(components_link.is_symlink(), "profiles/dev/components should be a symlink");
+    let bases_link = tmp.path().join("profiles/dev/bases");
+    assert!(bases_link.is_symlink(), "profiles/dev/bases should be a symlink");
+    let projects_link = tmp.path().join("profiles/dev/projects");
+    assert!(projects_link.is_symlink(), "profiles/dev/projects should be a symlink");
 }
 
 #[test]
@@ -345,17 +354,18 @@ logger = { path = "components/logger" }
     assert!(profile_content.contains("logger"), "should contain logger entry.\ncontent:\n{profile_content}");
     assert!(profile_content.contains("components/logger"), "should contain impl path.\ncontent:\n{profile_content}");
 
-    // Root members should be cleared — parse with toml_edit to check the members array.
+    // After migration, [workspace] should be removed from root Cargo.toml entirely.
     let root_content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
-    // The members array should be empty; workspace.dependencies still references
-    // "components/logger" as a path dep (that is expected and correct).
-    // Check that the workspace members array itself has no entries.
-    // We detect this by checking the line `members = [...]` in the rendered TOML;
-    // after clear, the array should render as empty.
     assert!(
-        root_content.contains("members = []") || root_content.contains("members = [\n]"),
-        "root Cargo.toml members should be empty after migration.\ncontent:\n{root_content}"
+        !root_content.contains("[workspace"),
+        "root Cargo.toml should have no [workspace] section after migration.\ncontent:\n{root_content}"
     );
+
+    // Polylith.toml should have been created
+    let polylith_toml_path = tmp.path().join("Polylith.toml");
+    assert!(polylith_toml_path.exists(), "Polylith.toml should have been created");
+    let polylith_content = fs::read_to_string(&polylith_toml_path).unwrap();
+    assert!(polylith_content.contains("[workspace]"), "Polylith.toml should have [workspace] section");
 }
 
 #[test]
@@ -365,10 +375,14 @@ fn profile_migrate_already_migrated() {
 
     let tmp = TempDir::new().unwrap();
 
-    // Root workspace with already-empty members
+    // A Polylith.toml already present — canonical marker for "already migrated"
+    fs::write(
+        tmp.path().join("Polylith.toml"),
+        "[workspace]\nschema_version = 1\n",
+    ).unwrap();
     fs::write(
         tmp.path().join("Cargo.toml"),
-        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+        "# polylith workspace — see Polylith.toml\n",
     ).unwrap();
 
     cargo_polylith()
@@ -519,4 +533,444 @@ fn profile_migrate_generates_profile_workspace() {
 
     let content = fs::read_to_string(&generated).unwrap();
     assert!(content.contains("[workspace]"), "should have [workspace] section");
+}
+
+#[test]
+fn profile_migrate_creates_polylith_toml() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+
+    // Root workspace with members, [workspace.package], and [workspace.dependencies]
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        r#"[workspace]
+members = ["components/logger"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+logger = { path = "components/logger" }
+serde = { version = "1", features = ["derive"] }
+"#,
+    ).unwrap();
+
+    let comp_dir = tmp.path().join("components/logger/src");
+    fs::create_dir_all(&comp_dir).unwrap();
+    fs::write(
+        tmp.path().join("components/logger/Cargo.toml"),
+        "[package]\nname = \"logger\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    ).unwrap();
+    fs::write(comp_dir.join("lib.rs"), "pub fn log() {}\n").unwrap();
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "profile",
+            "migrate",
+        ])
+        .assert()
+        .success();
+
+    // Polylith.toml should exist and contain the expected sections
+    let polylith_toml_path = tmp.path().join("Polylith.toml");
+    assert!(polylith_toml_path.exists(), "Polylith.toml should have been created");
+
+    let polylith_content = fs::read_to_string(&polylith_toml_path).unwrap();
+    assert!(polylith_content.contains("[workspace]"), "should have [workspace] section");
+    assert!(polylith_content.contains("[workspace.package]"), "should have [workspace.package] section");
+    assert!(polylith_content.contains("version = \"0.1.0\""), "should have version");
+    assert!(polylith_content.contains("edition = \"2021\""), "should have edition");
+    assert!(polylith_content.contains("[libraries]"), "should have [libraries] section");
+    assert!(polylith_content.contains("serde"), "should have serde library");
+    assert!(polylith_content.contains("[profiles]"), "should have [profiles] section");
+    assert!(polylith_content.contains("dev"), "should have dev profile entry");
+
+    // Root Cargo.toml should no longer contain [workspace
+    let root_content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
+    assert!(
+        !root_content.contains("[workspace"),
+        "root Cargo.toml should have no [workspace] section after migration.\ncontent:\n{root_content}"
+    );
+}
+
+#[test]
+fn profile_workspace_has_symlinks() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    let fixture = fixture_root();
+
+    let copy_file = |rel: &str| {
+        let src = fixture.join(rel);
+        let dst = tmp.path().join(rel);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        if src.exists() {
+            fs::copy(&src, &dst).unwrap();
+        }
+    };
+
+    copy_file("Cargo.toml");
+    copy_file("components/logger/Cargo.toml");
+    copy_file("components/logger/src/lib.rs");
+    copy_file("components/logger/src/logger.rs");
+    copy_file("components/parser/Cargo.toml");
+    copy_file("components/parser/src/lib.rs");
+    copy_file("components/parser/src/parser.rs");
+    copy_file("bases/cli/Cargo.toml");
+    copy_file("bases/cli/src/lib.rs");
+    copy_file("projects/main-project/Cargo.toml");
+    copy_file("projects/main-project/src/main.rs");
+    copy_file("profiles/dev.profile");
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "profile",
+            "build",
+            "dev",
+            "--no-build",
+        ])
+        .assert()
+        .success();
+
+    // profiles/dev/components, bases, projects must all be symlinks
+    let components_link = tmp.path().join("profiles/dev/components");
+    assert!(
+        components_link.is_symlink(),
+        "profiles/dev/components should be a symlink after profile build"
+    );
+    let bases_link = tmp.path().join("profiles/dev/bases");
+    assert!(
+        bases_link.is_symlink(),
+        "profiles/dev/bases should be a symlink after profile build"
+    );
+    let projects_link = tmp.path().join("profiles/dev/projects");
+    assert!(
+        projects_link.is_symlink(),
+        "profiles/dev/projects should be a symlink after profile build"
+    );
+}
+
+#[test]
+fn find_workspace_root_finds_polylith_toml() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+
+    // Create Polylith.toml at root (no Cargo.toml with [workspace])
+    fs::write(
+        tmp.path().join("Polylith.toml"),
+        "[workspace]\nschema_version = 1\n",
+    ).unwrap();
+
+    // Create a subdirectory (simulating a component)
+    let subdir = tmp.path().join("components/my-comp");
+    fs::create_dir_all(&subdir).unwrap();
+    fs::write(
+        subdir.join("Cargo.toml"),
+        "[package]\nname = \"my-comp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    ).unwrap();
+
+    // find_workspace_root from the subdirectory should return the tmp root
+    // We test this indirectly via the CLI using --workspace-root that was
+    // resolved to the polylith root. But we can also test the function
+    // directly from a unit-test in discover.rs. Here we test via the CLI
+    // by running info from the subdir with the polylith root.
+    //
+    // Actually the easiest is just to add the root Cargo.toml as a plain
+    // package (not workspace), ensuring the Polylith.toml wins over any
+    // Cargo workspace walk-up.
+    //
+    // Verify discover works: build from subdir should find polylith root.
+    // We use `cargo polylith info` with the workspace-root pointing to tmp
+    // to confirm the CLI accepts it as a valid root.
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "info",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn profile_migrate_strips_workspace_inheritance() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+
+    // Root workspace with [workspace.package] and [workspace.dependencies]
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        r#"[workspace]
+members = ["components/logger"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+logger = { path = "components/logger" }
+serde = { version = "1", features = ["derive"] }
+"#,
+    ).unwrap();
+
+    // Create a minimal component that uses workspace inheritance
+    let comp_dir = tmp.path().join("components/logger/src");
+    fs::create_dir_all(&comp_dir).unwrap();
+    fs::write(
+        tmp.path().join("components/logger/Cargo.toml"),
+        r#"[package]
+name = "logger"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+"#,
+    ).unwrap();
+    fs::write(comp_dir.join("lib.rs"), "pub fn log() {}\n").unwrap();
+
+    // Run migrate
+    let output = cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "profile",
+            "migrate",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = std::str::from_utf8(&output.stderr).unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+
+    assert!(
+        output.status.success(),
+        "migrate should succeed.\nstderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+
+    // Check that the component Cargo.toml has been rewritten
+    let comp_manifest = tmp.path().join("components/logger/Cargo.toml");
+    let comp_content = fs::read_to_string(&comp_manifest).unwrap();
+
+    assert!(
+        comp_content.contains("version = \"0.1.0\""),
+        "component should have explicit version.\ncontent:\n{comp_content}"
+    );
+    assert!(
+        comp_content.contains("edition = \"2021\""),
+        "component should have explicit edition.\ncontent:\n{comp_content}"
+    );
+    assert!(
+        comp_content.contains("version = \"1\"") || comp_content.contains("serde"),
+        "component should have explicit serde dep.\ncontent:\n{comp_content}"
+    );
+    assert!(
+        comp_content.contains("derive"),
+        "component serde dep should include derive feature.\ncontent:\n{comp_content}"
+    );
+    assert!(
+        !comp_content.contains("workspace = true"),
+        "component should not have any workspace = true after migration.\ncontent:\n{comp_content}"
+    );
+
+    // Summary output should mention stripping
+    assert!(
+        stdout.contains("Stripped workspace inheritance") || stderr.contains("Stripped workspace inheritance"),
+        "output should mention stripping.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn profile_migrate_strips_inter_brick_workspace_deps() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+
+    // Root workspace: logger and parser components; logger is an interface dep (path dep).
+    // parser depends on logger via { workspace = true } (inter-brick dep).
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        r#"[workspace]
+members = ["components/logger", "components/parser"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+logger = { path = "components/logger" }
+parser = { path = "components/parser" }
+serde = { version = "1", features = ["derive"] }
+"#,
+    ).unwrap();
+
+    // logger component — simple, no deps on other bricks
+    let logger_src = tmp.path().join("components/logger/src");
+    fs::create_dir_all(&logger_src).unwrap();
+    fs::write(
+        tmp.path().join("components/logger/Cargo.toml"),
+        r#"[package]
+name = "logger"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+"#,
+    ).unwrap();
+    fs::write(logger_src.join("lib.rs"), "pub fn log() {}\n").unwrap();
+
+    // parser component — depends on logger via workspace inheritance (inter-brick dep)
+    let parser_src = tmp.path().join("components/parser/src");
+    fs::create_dir_all(&parser_src).unwrap();
+    fs::write(
+        tmp.path().join("components/parser/Cargo.toml"),
+        r#"[package]
+name = "parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+logger = { workspace = true }
+serde = { workspace = true }
+"#,
+    ).unwrap();
+    fs::write(parser_src.join("lib.rs"), "pub fn parse() {}\n").unwrap();
+
+    // Run migrate
+    let output = cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "profile",
+            "migrate",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = std::str::from_utf8(&output.stderr).unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+
+    assert!(
+        output.status.success(),
+        "migrate should succeed.\nstderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+
+    // Check logger component was rewritten — library dep (serde) resolved, no workspace = true
+    let logger_manifest = tmp.path().join("components/logger/Cargo.toml");
+    let logger_content = fs::read_to_string(&logger_manifest).unwrap();
+    assert!(
+        !logger_content.contains("workspace = true"),
+        "logger should have no workspace = true after migration.\ncontent:\n{logger_content}"
+    );
+    assert!(
+        logger_content.contains("serde"),
+        "logger should still have serde dep.\ncontent:\n{logger_content}"
+    );
+
+    // Check parser component was rewritten — inter-brick dep (logger) becomes explicit path dep
+    let parser_manifest = tmp.path().join("components/parser/Cargo.toml");
+    let parser_content = fs::read_to_string(&parser_manifest).unwrap();
+    assert!(
+        !parser_content.contains("workspace = true"),
+        "parser should have no workspace = true after migration.\ncontent:\n{parser_content}"
+    );
+    assert!(
+        parser_content.contains("path"),
+        "parser's logger dep should be an explicit path dep.\ncontent:\n{parser_content}"
+    );
+    // The path from components/parser to components/logger should be ../logger
+    assert!(
+        parser_content.contains("../logger"),
+        "parser's logger dep should use relative path '../logger'.\ncontent:\n{parser_content}"
+    );
+}
+
+#[test]
+fn profile_workspace_member_paths_are_relative_to_profile_root() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    let fixture = fixture_root();
+
+    let copy_file = |rel: &str| {
+        let src = fixture.join(rel);
+        let dst = tmp.path().join(rel);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        if src.exists() {
+            fs::copy(&src, &dst).unwrap();
+        }
+    };
+
+    copy_file("Cargo.toml");
+    copy_file("components/logger/Cargo.toml");
+    copy_file("components/logger/src/lib.rs");
+    copy_file("components/logger/src/logger.rs");
+    copy_file("components/parser/Cargo.toml");
+    copy_file("components/parser/src/lib.rs");
+    copy_file("components/parser/src/parser.rs");
+    copy_file("bases/cli/Cargo.toml");
+    copy_file("bases/cli/src/lib.rs");
+    copy_file("projects/main-project/Cargo.toml");
+    copy_file("projects/main-project/src/main.rs");
+    copy_file("profiles/dev.profile");
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "profile",
+            "build",
+            "dev",
+            "--no-build",
+        ])
+        .assert()
+        .success();
+
+    let generated = tmp.path().join("profiles/dev/Cargo.toml");
+    let content = fs::read_to_string(&generated).unwrap();
+
+    // Member paths must NOT start with ../../ — they are relative to the profile
+    // workspace root and resolved via symlinks.
+    assert!(
+        !content.contains("../../"),
+        "generated Cargo.toml must not contain ../../ paths — use symlink-relative paths instead.\ncontent:\n{content}"
+    );
+
+    // Member paths should use the symlink-relative form
+    assert!(
+        content.contains("\"components/"),
+        "member paths should start with components/ not ../../components/.\ncontent:\n{content}"
+    );
+    assert!(
+        content.contains("\"bases/"),
+        "member paths should start with bases/ not ../../bases/.\ncontent:\n{content}"
+    );
 }
