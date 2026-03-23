@@ -56,29 +56,55 @@ stdin/stdout JSON-RPC transport, wires directly into Claude Code and other MCP c
 
 ## Next
 
-### `profile migrate` — strip workspace inheritance from bricks
+### `cargo polylith change-profile <profile>` (Option C — the correct model)
 
-After `Polylith.toml` is created and `[workspace]` is removed from root, bricks that use
-`{ workspace = true }` or `version.workspace = true` can no longer resolve against a root
-workspace. The migration must also rewrite each brick's `Cargo.toml` to use explicit values
-sourced from `Polylith.toml`:
+Cargo 1.94+ requires workspace members to be hierarchically below the workspace root.
+Generated profile workspaces at `profiles/dev/Cargo.toml` cannot list `../../components/...`
+as members — Cargo rejects them. The only viable workspace is the root.
 
-- `version.workspace = true` → explicit version from `Polylith.toml [workspace.package]`
-- `edition.workspace = true` → explicit edition
-- `dep = { workspace = true }` → explicit `dep = { version = "...", features = [...] }` from `Polylith.toml [libraries]`
-- Path deps and non-workspace deps are left unchanged
+**The correct model**: `change-profile` generates the root `Cargo.toml` as a complete
+workspace for the named profile and commits it. The active profile IS the root workspace.
+Bricks can use `{ workspace = true }` everywhere — it resolves against the root as normal.
 
-Bricks become fully self-contained. Profile workspaces claim them as members with no
-workspace-ancestry conflict. Swappable interface deps use explicit path deps wired via the
-profile workspace's `[workspace.dependencies]`.
+```
+cargo polylith change-profile production
+# generates root Cargo.toml with production implementations wired in [workspace.dependencies]
+# user commits: "chore: switch to production profile"
+```
 
-### Future: `cargo polylith change-profile <profile>` (Option C)
+**Key properties:**
+- No RAII restore / backup / lock needed — the swap is an intentional committed change
+- `{ workspace = true }` works normally everywhere
+- `cargo check`, `cargo build`, rust-analyzer all work at root without special flags
+- Profile history is in git: switching profiles is a real commit
 
-When bricks need `{ workspace = true }` for swappable interface deps, profiles cannot be
-separate workspaces (Cargo's walk-up makes bricks always resolve against their ancestor
-workspace, not the profile workspace). Option C defers this: `change-profile` generates
-and commits the root `Cargo.toml` from a profile — the active profile is always the real
-Cargo workspace. No RAII restore needed; the swap is intentional and committed.
+**Work needed — profile sync-back concerns:**
+After switching to a profile workspace, the user may:
+- Run `cargo add serde` → adds to the generated root Cargo.toml (the active profile workspace)
+- Create a new component → adds to the active workspace but not to Polylith.toml or other profiles
+- Edit `[profile.release]` settings in the generated workspace
+
+When switching profiles again, these changes would be overwritten by the next `change-profile`.
+This requires tooling to detect and handle divergence before switching:
+- `cargo polylith change-profile <name>` should detect uncommitted changes to root Cargo.toml
+  and warn / offer to sync them back to the relevant `.profile` file or `Polylith.toml`
+- New bricks created while a profile is active should be added to `Polylith.toml` and the
+  active `.profile` file automatically
+- `cargo add` / `cargo remove` changes to library deps should be reflected back to `Polylith.toml [libraries]`
+
+This sync-back problem needs design before implementation. Defer the details; establish
+the basic `change-profile` command first.
+
+### `profile migrate` — strip workspace inheritance (now superseded by Option C)
+
+The earlier plan to strip `{ workspace = true }` from all bricks and use subdirectory
+profile workspaces hit two hard Cargo constraints:
+1. Bricks resolve workspace references via directory walk-up (not via explicit member listing)
+2. Cargo 1.94+ requires workspace members to be hierarchically below the workspace root
+
+The stripping implementation (in `src/scaffold/mod.rs`) is kept as it may be useful for
+workspaces that want fully self-contained bricks, but it is no longer the path to profile
+switching.
 
 ## Next — model alignment (legacy)
 

@@ -727,3 +727,112 @@ serde = { workspace = true }
         "output should mention stripping.\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
+
+#[test]
+fn profile_migrate_strips_inter_brick_workspace_deps() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+
+    // Root workspace: logger and parser components; logger is an interface dep (path dep).
+    // parser depends on logger via { workspace = true } (inter-brick dep).
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        r#"[workspace]
+members = ["components/logger", "components/parser"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+logger = { path = "components/logger" }
+parser = { path = "components/parser" }
+serde = { version = "1", features = ["derive"] }
+"#,
+    ).unwrap();
+
+    // logger component — simple, no deps on other bricks
+    let logger_src = tmp.path().join("components/logger/src");
+    fs::create_dir_all(&logger_src).unwrap();
+    fs::write(
+        tmp.path().join("components/logger/Cargo.toml"),
+        r#"[package]
+name = "logger"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+"#,
+    ).unwrap();
+    fs::write(logger_src.join("lib.rs"), "pub fn log() {}\n").unwrap();
+
+    // parser component — depends on logger via workspace inheritance (inter-brick dep)
+    let parser_src = tmp.path().join("components/parser/src");
+    fs::create_dir_all(&parser_src).unwrap();
+    fs::write(
+        tmp.path().join("components/parser/Cargo.toml"),
+        r#"[package]
+name = "parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+logger = { workspace = true }
+serde = { workspace = true }
+"#,
+    ).unwrap();
+    fs::write(parser_src.join("lib.rs"), "pub fn parse() {}\n").unwrap();
+
+    // Run migrate
+    let output = cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "profile",
+            "migrate",
+        ])
+        .output()
+        .unwrap();
+
+    let stderr = std::str::from_utf8(&output.stderr).unwrap();
+    let stdout = std::str::from_utf8(&output.stdout).unwrap();
+
+    assert!(
+        output.status.success(),
+        "migrate should succeed.\nstderr:\n{stderr}\nstdout:\n{stdout}"
+    );
+
+    // Check logger component was rewritten — library dep (serde) resolved, no workspace = true
+    let logger_manifest = tmp.path().join("components/logger/Cargo.toml");
+    let logger_content = fs::read_to_string(&logger_manifest).unwrap();
+    assert!(
+        !logger_content.contains("workspace = true"),
+        "logger should have no workspace = true after migration.\ncontent:\n{logger_content}"
+    );
+    assert!(
+        logger_content.contains("serde"),
+        "logger should still have serde dep.\ncontent:\n{logger_content}"
+    );
+
+    // Check parser component was rewritten — inter-brick dep (logger) becomes explicit path dep
+    let parser_manifest = tmp.path().join("components/parser/Cargo.toml");
+    let parser_content = fs::read_to_string(&parser_manifest).unwrap();
+    assert!(
+        !parser_content.contains("workspace = true"),
+        "parser should have no workspace = true after migration.\ncontent:\n{parser_content}"
+    );
+    assert!(
+        parser_content.contains("path"),
+        "parser's logger dep should be an explicit path dep.\ncontent:\n{parser_content}"
+    );
+    // The path from components/parser to components/logger should be ../logger
+    assert!(
+        parser_content.contains("../logger"),
+        "parser's logger dep should use relative path '../logger'.\ncontent:\n{parser_content}"
+    );
+}
