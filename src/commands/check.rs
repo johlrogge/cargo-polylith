@@ -21,12 +21,14 @@ pub fn run(json: bool, profile_name: Option<&str>, workspace_root: Option<&Path>
         );
     }
 
-    let mut violations = run_checks(&map);
+    // Discover all profiles so orphan check can consider profile selections.
+    let all_profiles = discover_profiles(&root).unwrap_or_default();
+
+    let mut violations = run_checks(&map, &all_profiles);
 
     // If a profile name was given, also validate that profile.
     if let Some(name) = profile_name {
-        let profiles = discover_profiles(&root)?;
-        let profile = profiles
+        let profile = all_profiles
             .into_iter()
             .find(|p| p.name == name)
             .with_context(|| format!("profile '{}' not found in profiles/", name))?;
