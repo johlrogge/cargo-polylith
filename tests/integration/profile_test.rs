@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use predicates::str::contains;
 
 fn cargo_polylith() -> Command {
     Command::cargo_bin("cargo-polylith").unwrap()
@@ -191,7 +192,7 @@ fn profile_build_no_build_generates_cargo_toml() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Generated"));
+        .stderr(predicate::str::contains("Generated"));
 
     // Verify the generated file exists
     let generated = tmp.path().join("profiles/dev/Cargo.toml");
@@ -201,4 +202,13 @@ fn profile_build_no_build_generates_cargo_toml() {
     assert!(content.contains("[workspace]"), "should have [workspace] section");
     assert!(content.contains("../../components/logger"), "should have logger member");
     assert!(content.contains("../../components/parser"), "should have parser member");
+}
+
+#[test]
+fn profile_cargo_subcommand_requires_profile_flag() {
+    cargo_polylith()
+        .args(["polylith", "cargo", "build"])
+        .assert()
+        .failure()
+        .stderr(contains("--profile"));
 }

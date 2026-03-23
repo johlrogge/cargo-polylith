@@ -20,6 +20,7 @@ pub fn list(json: bool, workspace_root: Option<&Path>) -> Result<()> {
 }
 
 pub fn build(name: &str, no_build: bool, workspace_root: Option<&Path>) -> Result<()> {
+    eprintln!("warning: `profile build` is deprecated — use `cargo polylith cargo --profile {} build` instead.", name);
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
     let map = build_workspace_map(&root)?;
@@ -31,7 +32,7 @@ pub fn build(name: &str, no_build: bool, workspace_root: Option<&Path>) -> Resul
 
     let resolved = resolve_profile_workspace(&root, &profile, &map);
     let generated = crate::scaffold::write_profile_workspace(&root, &resolved)?;
-    println!("Generated {}", generated.display());
+    eprintln!("Generated {}", generated.display());
 
     if !no_build {
         let status = std::process::Command::new("cargo")
@@ -67,5 +68,33 @@ pub fn new(name: &str, workspace_root: Option<&Path>) -> Result<()> {
     let root = resolve_root(&cwd, workspace_root)?;
     crate::scaffold::create_profile(&root, name)?;
     println!("Created profiles/{name}.profile");
+    Ok(())
+}
+
+pub fn run_cargo(profile_name: &str, cargo_args: &[String], workspace_root: Option<&Path>) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let root = resolve_root(&cwd, workspace_root)?;
+    let map = build_workspace_map(&root)?;
+    let profiles = discover_profiles(&root)?;
+    let profile = profiles
+        .into_iter()
+        .find(|p| p.name == profile_name)
+        .with_context(|| format!("profile '{}' not found in profiles/", profile_name))?;
+
+    let resolved = resolve_profile_workspace(&root, &profile, &map);
+    let generated = crate::scaffold::write_profile_workspace(&root, &resolved)?;
+    eprintln!("Generated {}", generated.display());
+
+    let status = std::process::Command::new("cargo")
+        .arg("--manifest-path")
+        .arg(&generated)
+        .args(cargo_args)
+        .status()
+        .context("failed to invoke cargo")?;
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
     Ok(())
 }
