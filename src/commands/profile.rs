@@ -113,7 +113,7 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
 
     // Strip { workspace = true } from all brick Cargo.tomls
     let polylith_toml = crate::workspace::read_polylith_toml(&root)?;
-    let stripped_count = crate::scaffold::strip_workspace_inheritance(&root, &polylith_toml)?;
+    let stripped_count = crate::scaffold::strip_workspace_inheritance(&root, &polylith_toml, &impl_pairs)?;
     if stripped_count > 0 {
         eprintln!("Stripped workspace inheritance from {} brick(s)", stripped_count);
     }

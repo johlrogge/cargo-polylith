@@ -522,6 +522,27 @@ pub fn demote_root_workspace(root: &Path, force: bool) -> Result<()> {
     // Remove [workspace] from root Cargo.toml entirely
     doc.remove("workspace");
 
+    // Ensure the root Cargo.toml has a [package] section so Cargo can parse it.
+    // Without [package] or [workspace], Cargo errors when walking up from bricks.
+    // A dummy unpublished package is fine — Cargo walks past it (no [workspace])
+    // so profile workspaces can still claim the bricks as members.
+    if doc.get("package").is_none() {
+        let mut pkg = toml_edit::table();
+        pkg["name"] = toml_edit::value("workspace-root");
+        pkg["version"] = toml_edit::value("0.0.0");
+        pkg["edition"] = toml_edit::value("2021");
+        pkg["publish"] = toml_edit::value(false);
+        doc.insert("package", pkg);
+        // Create an empty src/lib.rs so Cargo finds a valid target for this package.
+        let src_dir = root.join("src");
+        fs::create_dir_all(&src_dir).with_context(|| format!("creating {}", src_dir.display()))?;
+        let lib_rs = src_dir.join("lib.rs");
+        if !lib_rs.exists() {
+            fs::write(&lib_rs, "// Polylith workspace root placeholder — do not edit.\n")
+                .with_context(|| format!("writing {}", lib_rs.display()))?;
+        }
+    }
+
     fs::write(&manifest_path, doc.to_string())
         .with_context(|| format!("writing {}", manifest_path.display()))?;
 
@@ -530,13 +551,22 @@ pub fn demote_root_workspace(root: &Path, force: bool) -> Result<()> {
 
 /// Strip `{ workspace = true }` references from all brick `Cargo.toml` files
 /// under `components/` and `bases/`, replacing them with explicit values from
-/// `polylith_toml`. Returns the number of bricks rewritten.
+/// `polylith_toml`. Inter-brick deps (path deps to other components/bases) are
+/// converted to explicit path deps using `interface_impls`.
+/// Returns the number of bricks rewritten.
 pub fn strip_workspace_inheritance(
     root: &Path,
     polylith_toml: &crate::workspace::PolylithToml,
+    interface_impls: &[(String, String)],
 ) -> Result<usize> {
+    // Build a HashMap for O(1) lookup: interface_key -> path_relative_to_root
+    let impl_map: std::collections::HashMap<&str, &str> = interface_impls
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
     let mut count = 0;
-    for kind_dir in &["components", "bases"] {
+    for kind_dir in &["components", "bases", "projects"] {
         let dir = root.join(kind_dir);
         if !dir.exists() {
             continue;
@@ -550,7 +580,7 @@ pub fn strip_workspace_inheritance(
             if !manifest_path.exists() {
                 continue;
             }
-            let changed = strip_workspace_from_manifest(&manifest_path, polylith_toml)?;
+            let changed = strip_workspace_from_manifest(&manifest_path, polylith_toml, &impl_map, root)?;
             if changed {
                 count += 1;
             }
@@ -560,10 +590,13 @@ pub fn strip_workspace_inheritance(
 }
 
 /// Rewrite a single brick `Cargo.toml`, replacing `{ workspace = true }` fields
-/// with explicit values from `polylith_toml`. Returns `true` if the file was changed.
+/// with explicit values from `polylith_toml`. Inter-brick workspace deps are
+/// converted to explicit path deps using `impl_map`. Returns `true` if the file was changed.
 fn strip_workspace_from_manifest(
     manifest_path: &Path,
     polylith_toml: &crate::workspace::PolylithToml,
+    impl_map: &std::collections::HashMap<&str, &str>,
+    root: &Path,
 ) -> Result<bool> {
     let content = fs::read_to_string(manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
@@ -626,15 +659,20 @@ fn strip_workspace_from_manifest(
             // Look up in polylith_toml.libraries
             if let Some(lib_info) = polylith_toml.libraries.get(&dep_name) {
                 let new_val = if lib_info.features.is_empty() {
-                    // Simple version string
                     if let Some(ver) = &lib_info.version {
+                        // Simple version string
                         toml_edit::Item::Value(toml_edit::Value::from(ver.as_str()))
+                    } else if let Some(raw) = &lib_info.raw {
+                        // Non-version dep (git, etc.) — parse the raw TOML value
+                        match raw.parse::<toml_edit::Value>() {
+                            Ok(v) => toml_edit::Item::Value(v),
+                            Err(_) => {
+                                eprintln!("warning: dep '{}' — could not parse raw value from Polylith.toml, left unchanged", dep_name);
+                                continue;
+                            }
+                        }
                     } else {
-                        // No version to substitute — leave unchanged
-                        eprintln!(
-                            "warning: dep '{}' uses workspace = true but Polylith.toml has no version — left unchanged",
-                            dep_name
-                        );
+                        eprintln!("warning: dep '{}' uses workspace = true but Polylith.toml has no version — left unchanged", dep_name);
                         continue;
                     }
                 } else {
@@ -652,9 +690,35 @@ fn strip_workspace_from_manifest(
                 };
                 doc[table_name][&dep_name] = new_val;
                 changed = true;
+            } else if let Some(impl_path) = impl_map.get(dep_name.as_str()) {
+                // Inter-brick dep: convert to explicit path dep, preserving other attributes
+                let brick_dir = manifest_path.parent().unwrap();
+                let target_dir = root.join(impl_path);
+                let rel = relative_path(brick_dir, &target_dir);
+                let existing = doc[table_name].get(&dep_name).cloned();
+                let mut tbl = toml_edit::InlineTable::new();
+                tbl.insert("path", toml_edit::Value::from(rel.to_string_lossy().as_ref()));
+                // Preserve other attributes (optional, package, features, default-features)
+                for key in &["optional", "package", "features", "default-features"] {
+                    let val = existing.as_ref().and_then(|it| {
+                        it.as_value()
+                            .and_then(|v| v.as_inline_table())
+                            .and_then(|t| t.get(key))
+                            .or_else(|| {
+                                it.as_table()
+                                    .and_then(|t| t.get(key))
+                                    .and_then(|v| v.as_value())
+                            })
+                    });
+                    if let Some(v) = val {
+                        tbl.insert(*key, v.clone());
+                    }
+                }
+                doc[table_name][&dep_name] = toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl));
+                changed = true;
             } else {
                 eprintln!(
-                    "warning: dep '{}' uses workspace = true but is not in Polylith.toml [libraries] — left unchanged",
+                    "warning: dep '{}' uses workspace = true but is not in Polylith.toml [libraries] or [implementations] — left unchanged",
                     dep_name
                 );
             }
