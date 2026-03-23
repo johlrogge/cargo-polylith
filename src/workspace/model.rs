@@ -51,8 +51,11 @@ pub struct Brick {
 pub struct ExternalDepInfo {
     /// Sorted list of enabled features.
     pub features: Vec<String>,
-    /// Version string, if present (None for `{ workspace = true }` or version-less entries).
+    /// Version string, if present (None for git deps, path deps, etc.).
     pub version: Option<String>,
+    /// Raw TOML dep value as written in [libraries] (e.g. `{ git = "...", rev = "..." }`).
+    /// Used when `version` is None to emit the dep verbatim during workspace stripping.
+    pub raw: Option<String>,
 }
 
 /// A path dependency declared in `[workspace.dependencies]` — the interface wiring diagram.

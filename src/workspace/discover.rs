@@ -102,7 +102,7 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
                                 .map(|d| d.features.clone())
                                 .unwrap_or_default();
                             features.sort();
-                            Some((key, ExternalDepInfo { features, version }))
+                            Some((key, ExternalDepInfo { features, version, raw: None }))
                         })
                         .collect::<std::collections::HashMap<_, _>>()
                 })
@@ -246,7 +246,8 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
             }
             let version = parse_version_from_item(v);
             let features = parse_features_from_item(v);
-            libraries.insert(k.to_string(), ExternalDepInfo { features, version });
+            let raw = Some(render_dep_item_raw(v));
+            libraries.insert(k.to_string(), ExternalDepInfo { features, version, raw });
         }
     }
 
@@ -388,6 +389,14 @@ fn parse_version_from_item(v: &toml_edit::Item) -> Option<String> {
         .and_then(|v| v.as_str())
         .filter(|s| *s != "*")
         .map(|s| s.to_string())
+}
+
+/// Render a toml_edit Item as a raw TOML value string suitable for use as a dep spec.
+fn render_dep_item_raw(v: &toml_edit::Item) -> String {
+    if let Some(s) = v.as_value().and_then(|v| v.as_str()) {
+        return format!("\"{}\"", s);
+    }
+    v.to_string().trim().to_string()
 }
 
 fn parse_features_from_item(v: &toml_edit::Item) -> Vec<String> {
@@ -533,7 +542,7 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
                         // External dep — capture features and version for drift checks.
                         let features = extract_features(v);
                         let version = extract_version(v);
-                        external_deps.insert(k.to_string(), ExternalDepInfo { features, version });
+                        external_deps.insert(k.to_string(), ExternalDepInfo { features, version, raw: None });
                     }
                 }
             }
@@ -605,7 +614,7 @@ pub fn discover_profiles(root: &Path) -> Result<Vec<Profile>> {
             for (k, v) in libs.iter() {
                 let version = parse_version_from_item(v);
                 let features = parse_features_from_item(v);
-                libraries.insert(k.to_string(), ExternalDepInfo { features, version });
+                libraries.insert(k.to_string(), ExternalDepInfo { features, version, raw: None });
             }
         }
         profiles.push(Profile { name, path: path.clone(), implementations, libraries });
