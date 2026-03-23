@@ -75,19 +75,26 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
 
+    // Check if already migrated: Polylith.toml existence is the canonical marker
+    let polylith_toml_path = root.join("Polylith.toml");
+    if polylith_toml_path.exists() {
+        eprintln!("workspace already migrated — Polylith.toml already exists");
+        return Ok(());
+    }
+
     // Read root Cargo.toml to check current members using cargo_toml for reliability
     let manifest_path = root.join("Cargo.toml");
     let manifest = cargo_toml::Manifest::from_path(&manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
 
-    // Check if members is already empty
+    // Also check if members is already empty (legacy already-migrated state)
     let members_empty = manifest
         .workspace
         .as_ref()
         .map(|ws| ws.members.is_empty())
         .unwrap_or(true);
 
-    if members_empty {
+    if members_empty && !polylith_toml_path.exists() {
         eprintln!("workspace already migrated — root members is already empty");
         return Ok(());
     }
@@ -115,6 +122,15 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
     crate::scaffold::create_dev_profile_from_deps(&root, &impl_pairs)?;
     eprintln!("Created profiles/dev.profile");
 
+    // Demote root workspace: write Polylith.toml and remove [workspace] from Cargo.toml
+    // Must happen before profile workspace generation so [workspace.package] is available
+    crate::scaffold::demote_root_workspace(&root, force)?;
+    eprintln!("Created Polylith.toml");
+    eprintln!("Removed [workspace] from root Cargo.toml");
+
+    // Re-read workspace map now that Polylith.toml exists — it will populate workspace_package
+    let map = build_workspace_map(&root)?;
+
     // Discover the newly written profile and resolve + write the profile workspace
     let profiles = discover_profiles(&root)?;
     let dev_profile = profiles
@@ -124,10 +140,6 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
     let resolved = resolve_profile_workspace(&root, &dev_profile, &map);
     let generated = crate::scaffold::write_profile_workspace(&root, &resolved)?;
     eprintln!("Generated {}", generated.display());
-
-    // Clear root workspace members
-    crate::scaffold::clear_root_members(&root)?;
-    eprintln!("Cleared root workspace members");
 
     // Print summary
     println!();
@@ -142,8 +154,8 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
         }
     }
     println!();
-    println!("  Root workspace members cleared (previously managed components/bases/projects");
-    println!("  are now referenced via the generated profile workspace).");
+    println!("  Polylith.toml written — workspace metadata and library versions moved there.");
+    println!("  [workspace] removed from root Cargo.toml.");
     println!();
     println!("New workflow:");
     println!("  cargo polylith cargo build       # build with dev profile (default)");
