@@ -332,29 +332,6 @@ pub fn create_dev_profile_from_deps(root: &Path, impls: &[(String, String)]) -> 
     Ok(())
 }
 
-/// Read root `Cargo.toml` with `toml_edit`, set `[workspace].members` to an empty array,
-/// and write back. Preserves all other content (including `[workspace.dependencies]`).
-#[allow(dead_code)]
-pub fn clear_root_members(root: &Path) -> Result<()> {
-    let manifest_path = root.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let mut doc: DocumentMut = content.parse().context("parsing root Cargo.toml")?;
-
-    // Clear members in place to preserve formatting.
-    if let Some(members) = doc["workspace"]["members"].as_array_mut() {
-        members.clear();
-    } else {
-        doc["workspace"]["members"] = toml_edit::array();
-    }
-
-
-    fs::write(&manifest_path, doc.to_string())
-        .with_context(|| format!("writing {}", manifest_path.display()))?;
-
-    Ok(())
-}
-
 /// Demote the root workspace:
 /// 1. Extracts `[workspace.package]` and non-path `[workspace.dependencies]` from `Cargo.toml`
 /// 2. Discovers existing profile names from `profiles/*.profile`

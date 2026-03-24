@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+use crate::corsett::FoldEntry;
 use super::app::{App, DepState, InputMode, RowKind};
 
 const IFACE_WIDTH: u16 = 16; // interface label column (left)
@@ -147,7 +148,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     // Build fold plan: binary — chain rows shown, everything else hidden
     let cursor_row_name = app.rows.get(app.cursor_row).map(|r| r.name.as_str()).unwrap_or("");
 
-    let fold_plan: Vec<crate::corsett::FoldEntry> = if app.fold_active && !chain_map.is_empty() {
+    let fold_plan: Vec<FoldEntry> = if app.fold_active && !chain_map.is_empty() {
         // Sort chain rows in dependency order:
         // 1. Upstream rows (step order: direct dep first)
         // 2. Cursor row
@@ -175,17 +176,17 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         let chain_set: std::collections::HashSet<usize> = ordered_chain.iter().copied().collect();
         let non_chain_count = app.rows.len().saturating_sub(chain_set.len());
 
-        let mut plan: Vec<crate::corsett::FoldEntry> = Vec::new();
+        let mut plan: Vec<FoldEntry> = Vec::new();
         if non_chain_count > 0 {
-            plan.push(crate::corsett::FoldEntry::Hidden(non_chain_count));
+            plan.push(FoldEntry::Hidden(non_chain_count));
         }
         for row_i in ordered_chain {
-            plan.push(crate::corsett::FoldEntry::Row(row_i));
+            plan.push(FoldEntry::Row(row_i));
         }
         plan
     } else {
         (scroll_row..app.rows.len())
-            .map(crate::corsett::FoldEntry::Row)
+            .map(FoldEntry::Row)
             .collect()
     };
 
@@ -199,7 +200,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         let row_i = match entry {
-            crate::corsett::FoldEntry::Hidden(count) => {
+            FoldEntry::Hidden(count) => {
                 // Render a single dimmed placeholder row
                 let text = format!("  \u{27e8}{count} rows hidden\u{27e9}");
                 let buf = frame.buffer_mut();
@@ -212,7 +213,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
                 display_y += 1;
                 continue;
             }
-            crate::corsett::FoldEntry::Row(i) => i,
+            FoldEntry::Row(i) => i,
         };
         let row_kind = app.rows[row_i].kind;
 
@@ -438,6 +439,6 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { s } else { &s[..max] }
+    s.char_indices().nth(max).map_or(s, |(i, _)| &s[..i])
 }
 

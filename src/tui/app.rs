@@ -7,6 +7,7 @@ use toml_edit::DocumentMut;
 
 use crate::workspace::model::WorkspaceMap;
 
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RowKind {
     Component,
@@ -68,8 +69,6 @@ pub struct App {
     comp_deps: HashMap<String, Vec<String>>,
     /// Direct deps per project column (indexed by col).
     project_direct_deps: Vec<Vec<String>>,
-    /// Set of base names for annotating chains.
-    base_names: HashSet<String>,
 }
 
 impl App {
@@ -143,16 +142,10 @@ impl App {
             .map(|p| p.deps.clone())
             .collect();
 
-        let base_names: HashSet<String> = map
-            .bases
-            .iter()
-            .map(|b| b.name.clone())
-            .collect();
-
         let status = if cols.is_empty() {
-            "n: new project  q: quit".into()
+            "Ctrl-Ctrl-n: new project  q: quit".into()
         } else {
-            "←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit".into()
+            "←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  Ctrl-Ctrl-n: new project  q: quit".into()
         };
 
         Ok(App {
@@ -175,7 +168,6 @@ impl App {
             fold_active: false,
             comp_deps,
             project_direct_deps,
-            base_names,
         })
     }
 
@@ -376,7 +368,7 @@ impl App {
         self.cursor_col = new_col_idx;
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
-        self.status = format!("Created project '{name}'.  ←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit");
+        self.status = format!("Created project '{name}'.  ←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  Ctrl-n: new project  q: quit");
         Ok(())
     }
 
@@ -384,9 +376,9 @@ impl App {
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
         self.status = if self.cols.is_empty() {
-            "n: new project  q: quit".into()
+            "Ctrl-n: new project  q: quit".into()
         } else {
-            "←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit".into()
+            "←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  Ctrl-n: new project  q: quit".into()
         };
     }
 
@@ -411,7 +403,7 @@ impl App {
         self.modified_rows[row_i] = true;
         self.input_mode = InputMode::Normal;
         self.input_buffer.clear();
-        self.status = "Interface staged — press w to write.  ←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit".into();
+        self.status = "Interface staged — press w to write.  ←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  Ctrl-n: new project  q: quit".into();
     }
 
     /// Returns the raw dependency chain if the cursor is on a Transitive cell.
@@ -425,7 +417,7 @@ impl App {
         }
         let target = &self.rows.get(r)?.name;
         let direct = self.project_direct_deps.get(c)?;
-        find_chain(target, direct, &self.comp_deps, &self.base_names)
+        find_chain(target, direct, &self.comp_deps)
     }
 
     /// Returns downstream BFS levels from the hovered cell.
@@ -616,7 +608,6 @@ fn find_chain(
     target: &str,
     direct: &[String],
     all_deps: &HashMap<String, Vec<String>>,
-    _base_names: &HashSet<String>,
 ) -> Option<Vec<String>> {
     // BFS — each queue entry is a brick name; parent map tracks how we got there.
     let mut parent: HashMap<String, Option<String>> = HashMap::new();
@@ -687,16 +678,12 @@ mod tests {
             .collect()
     }
 
-    fn empty_bases() -> HashSet<String> {
-        HashSet::new()
-    }
-
     /// Simple linear chain: direct = [A], A→B, B→C. find_chain("C") = [A, B, C].
     #[test]
     fn test_find_chain_simple() {
         let all_deps = make_deps(&[("a", &["b"]), ("b", &["c"])]);
         let direct = vec!["a".to_string()];
-        let result = find_chain("c", &direct, &all_deps, &empty_bases());
+        let result = find_chain("c", &direct, &all_deps);
         assert_eq!(result, Some(vec!["a".to_string(), "b".to_string(), "c".to_string()]));
     }
 
@@ -705,7 +692,7 @@ mod tests {
     fn test_find_chain_diamond() {
         let all_deps = make_deps(&[("a", &["b", "c"]), ("b", &["d"]), ("c", &["d"])]);
         let direct = vec!["a".to_string()];
-        let result = find_chain("d", &direct, &all_deps, &empty_bases());
+        let result = find_chain("d", &direct, &all_deps);
         // Shortest path must be length 3 (A → B or C → D)
         let chain = result.expect("should find a chain");
         assert_eq!(chain.len(), 3);
@@ -717,12 +704,9 @@ mod tests {
     /// by transitive_chain_for_cursor. We just verify the chain contains the base name.
     #[test]
     fn test_find_chain_base_in_chain() {
-        let mut base_names: HashSet<String> = HashSet::new();
-        base_names.insert("cli".to_string());
-
         let all_deps = make_deps(&[("cli", &["mcp"]), ("mcp", &["scaffold"])]);
         let direct = vec!["cli".to_string()];
-        let result = find_chain("scaffold", &direct, &all_deps, &base_names);
+        let result = find_chain("scaffold", &direct, &all_deps);
         assert_eq!(
             result,
             Some(vec!["cli".to_string(), "mcp".to_string(), "scaffold".to_string()])
@@ -734,7 +718,7 @@ mod tests {
     fn test_find_chain_not_reachable() {
         let all_deps = make_deps(&[("a", &["b"])]);
         let direct = vec!["a".to_string()];
-        let result = find_chain("z", &direct, &all_deps, &empty_bases());
+        let result = find_chain("z", &direct, &all_deps);
         assert_eq!(result, None);
     }
 }

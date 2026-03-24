@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -25,7 +23,7 @@ pub struct PolylithToml {
     pub profiles: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrickKind {
     Component,
@@ -76,6 +74,7 @@ pub struct Project {
     /// Projects must be plain bin crates in the root workspace, not sub-workspaces.
     pub has_own_workspace: bool,
     /// The `name` field from the first `[[bin]]` entry in the project's Cargo.toml, if any.
+    #[allow(dead_code)] // populated during discovery; reserved for future use in output commands
     pub bin_name: Option<String>,
     /// Raw path dependencies: (dep_key, resolved_absolute_path). Used to validate
     /// that dep keys match the target package name. Only populated for deps that
