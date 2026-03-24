@@ -51,14 +51,36 @@ pub fn fold_to_height(
     available: usize,
     scroll_offset: usize,
 ) -> Vec<FoldEntry> {
-    let rows_from_scroll = total_rows.saturating_sub(scroll_offset);
-    if rows_from_scroll <= available {
-        // Everything fits — no hiding needed
+    let count = total_rows.saturating_sub(scroll_offset);
+    if count <= available {
         return (scroll_offset..total_rows).map(FoldEntry::Row).collect();
     }
-    // Hide non-chain rows in consecutive groups
+
+    // Count chain rows and gaps in the scroll range
+    let mut chain_in_range = 0usize;
+    let mut non_empty_gaps = 0usize;
+    let mut in_gap = false;
+    for i in scroll_offset..total_rows {
+        if must_show.contains(&i) {
+            chain_in_range += 1;
+            in_gap = false;
+        } else if !in_gap {
+            non_empty_gaps += 1;
+            in_gap = true;
+        }
+    }
+
+    // Minimum display rows needed: chain rows + one placeholder per gap
+    let min_needed = chain_in_range + non_empty_gaps;
+    // Extra budget: rows beyond the minimum we can fill with non-chain rows
+    let extra = available.saturating_sub(min_needed);
+
+    // Build the plan: show chain rows always, fill extra budget with non-chain rows
+    // (greedy top-to-bottom), collapse the rest into Hidden entries
     let mut plan = Vec::new();
     let mut hidden = 0usize;
+    let mut budget = extra;
+
     for i in scroll_offset..total_rows {
         if must_show.contains(&i) {
             if hidden > 0 {
@@ -66,6 +88,14 @@ pub fn fold_to_height(
                 hidden = 0;
             }
             plan.push(FoldEntry::Row(i));
+        } else if budget > 0 {
+            // Use budget to show this non-chain row
+            if hidden > 0 {
+                plan.push(FoldEntry::Hidden(hidden));
+                hidden = 0;
+            }
+            plan.push(FoldEntry::Row(i));
+            budget -= 1;
         } else {
             hidden += 1;
         }
@@ -424,6 +454,8 @@ mod tests {
         // 10 rows, only rows 2 and 5 must show, available = 5 (not enough for all 10)
         let must_show: std::collections::HashSet<usize> = [2, 5].iter().copied().collect();
         let plan = fold_to_height(10, &must_show, 5, 0);
+        // chain=2, gaps=3 (rows 0-1, rows 3-4, rows 6-9), min_needed=5, extra=0
+        // All non-chain rows get hidden
         // Expect: Hidden(2), Row(2), Hidden(2), Row(5), Hidden(4)
         assert_eq!(
             plan,
@@ -431,6 +463,29 @@ mod tests {
                 FoldEntry::Hidden(2),
                 FoldEntry::Row(2),
                 FoldEntry::Hidden(2),
+                FoldEntry::Row(5),
+                FoldEntry::Hidden(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn fold_to_height_keeps_rows_when_budget_allows() {
+        // 10 rows, must_show=[4], available=8
+        // chain=1, gaps=2 (rows 0-3, rows 5-9), min_needed=3, extra=5
+        // Budget=5: show rows 0,1,2,3 (4 non-chain, budget→1), chain row 4,
+        //           then row 5 (budget→0), then rows 6-9 hidden
+        // Plan: Row(0), Row(1), Row(2), Row(3), Row(4), Row(5), Hidden(4)
+        let must_show: std::collections::HashSet<usize> = [4].iter().copied().collect();
+        let plan = fold_to_height(10, &must_show, 8, 0);
+        assert_eq!(
+            plan,
+            vec![
+                FoldEntry::Row(0),
+                FoldEntry::Row(1),
+                FoldEntry::Row(2),
+                FoldEntry::Row(3),
+                FoldEntry::Row(4),
                 FoldEntry::Row(5),
                 FoldEntry::Hidden(4),
             ]
