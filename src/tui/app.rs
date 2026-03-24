@@ -77,6 +77,8 @@ pub struct App {
     pub pending_g: bool,
     pub confirm_quit: bool,
     pub fold_active: bool,
+    pub available_profiles: Vec<crate::workspace::Profile>,
+    pub viewed_profile_idx: usize,
     /// Component dependency graph — used to recompute transitive states on toggle.
     comp_deps: HashMap<String, Vec<String>>,
     /// Direct deps per project column (indexed by col).
@@ -160,6 +162,8 @@ impl App {
             "←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  Ctrl-Ctrl-n: new project  q: quit".into()
         };
 
+        let available_profiles = crate::workspace::discover_profiles(&map.root).unwrap_or_default();
+
         Ok(App {
             rows,
             cols,
@@ -178,6 +182,8 @@ impl App {
             pending_g: false,
             confirm_quit: false,
             fold_active: false,
+            available_profiles,
+            viewed_profile_idx: 0,
             comp_deps,
             project_direct_deps,
         })
@@ -514,6 +520,42 @@ impl App {
         } else {
             format!("Wrote {written} change(s).")
         };
+        Ok(())
+    }
+
+    /// Returns true if this row belongs to an interface implemented by 2+ components.
+    /// Only multi-impl interface rows use radio button rendering and profile toggling.
+    pub fn is_multi_impl_interface(&self, row_i: usize) -> bool {
+        match self.rows.get(row_i).and_then(|r| r.interface.as_deref()) {
+            Some(iface) => self.rows.iter()
+                .filter(|r| r.interface.as_deref() == Some(iface))
+                .count() >= 2,
+            None => false,
+        }
+    }
+
+    pub fn toggle_profile_impl(&mut self, row_i: usize) -> anyhow::Result<()> {
+        if self.available_profiles.is_empty() {
+            return Ok(());
+        }
+        let profile_idx = self.viewed_profile_idx;
+        let iface = match self.rows.get(row_i).and_then(|r| r.interface.clone()) {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+        let rel_path = self.rows[row_i].path
+            .strip_prefix(&self.workspace_root)
+            .unwrap_or(&self.rows[row_i].path)
+            .to_string_lossy()
+            .into_owned();
+        // No-op if this implementation is already selected
+        let current = self.available_profiles[profile_idx].implementations.get(&iface).cloned();
+        if current.as_deref() == Some(rel_path.as_str()) {
+            return Ok(());
+        }
+        self.available_profiles[profile_idx].implementations.insert(iface.clone(), rel_path.clone());
+        let profile_path = self.available_profiles[profile_idx].path.clone();
+        crate::scaffold::write_profile_impl(&profile_path, &iface, &rel_path)?;
         Ok(())
     }
 }

@@ -17,11 +17,36 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),  // profile tabs
+            Constraint::Min(3),     // grid
+            Constraint::Length(1),  // status bar
+        ])
         .split(area);
 
-    draw_grid(frame, app, layout[0]);
-    draw_status(frame, app, layout[1]);
+    draw_profile_tabs(frame, app, layout[0]);
+    draw_grid(frame, app, layout[1]);
+    draw_status(frame, app, layout[2]);
+}
+
+fn draw_profile_tabs(frame: &mut Frame, app: &App, area: Rect) {
+    if app.available_profiles.is_empty() {
+        return;
+    }
+    let buf = frame.buffer_mut();
+    let mut x = area.x + 1;
+    for (i, profile) in app.available_profiles.iter().enumerate() {
+        let label = format!("[{}: {}]", i + 1, profile.name);
+        let style = if i == app.viewed_profile_idx {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        if x < area.x + area.width {
+            buf.set_string(x, area.y, &label, style);
+            x += label.chars().count() as u16 + 1;
+        }
+    }
 }
 
 fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -137,6 +162,19 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         }
         counts.into_iter().filter(|&(_, n)| n >= 2).map(|(k, _)| k).collect()
+    };
+
+    // Radio buttons only meaningful when profiles are loaded
+    let has_profiles = !app.available_profiles.is_empty();
+
+    // Pre-compute viewed profile's impl map
+    let viewed_impl_map: std::collections::HashMap<&str, &str> = if has_profiles {
+        app.available_profiles
+            .get(app.viewed_profile_idx)
+            .map(|p| p.implementations.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect())
+            .unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
     };
 
     // ── Data rows ──────────────────────────────────────────────────────────
@@ -350,17 +388,29 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
                 )
             } else {
                 // Radio-button rendering for multi-implementation interface groups
-                let is_radio = app.rows.get(row_i)
+                let is_radio = has_profiles
+                    && app.rows.get(row_i)
+                        .and_then(|r| r.interface.as_deref())
+                        .map(|iface| multi_impl_interfaces.contains(iface))
+                        .unwrap_or(false);
+
+                let radio_selected = app.rows.get(row_i)
                     .and_then(|r| r.interface.as_deref())
-                    .map(|iface| multi_impl_interfaces.contains(iface))
+                    .and_then(|iface| viewed_impl_map.get(iface))
+                    .map(|&sel| {
+                        let rel = app.rows[row_i].path
+                            .strip_prefix(&app.workspace_root).ok()
+                            .map(|p| p.to_string_lossy().into_owned());
+                        rel.as_deref() == Some(sel)
+                    })
                     .unwrap_or(false);
 
-                match (dep_state, is_radio) {
-                    (DepState::Direct, true) => (
+                match (radio_selected, is_radio) {
+                    (true, true) => (
                         "\u{25c9}".to_string(), // ◉
                         Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
                     ),
-                    (DepState::None, true) => (
+                    (false, true) => (
                         "\u{25cb}".to_string(), // ○
                         Style::default().fg(Color::DarkGray),
                     ),

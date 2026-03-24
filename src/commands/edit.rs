@@ -98,7 +98,24 @@ fn run_loop(
                         KeyCode::Down | KeyCode::Char('j') => app.move_down(),
                         KeyCode::Left | KeyCode::Char('h') => app.move_left(),
                         KeyCode::Right | KeyCode::Char('l') => app.move_right(),
-                        KeyCode::Char(' ') => app.toggle_cell(),
+                        KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
+                            let n = (c as u8 - b'1') as usize;
+                            if n < app.available_profiles.len() {
+                                app.viewed_profile_idx = n;
+                            }
+                        }
+                        KeyCode::Char(' ') => {
+                            let r = app.cursor_row;
+                            let is_radio_row = !app.available_profiles.is_empty()
+                                && app.is_multi_impl_interface(r);
+                            if is_radio_row {
+                                if let Err(e) = app.toggle_profile_impl(r) {
+                                    app.status = format!("error: {}", e);
+                                }
+                            } else {
+                                app.toggle_cell();
+                            }
+                        }
                         KeyCode::Char('w') => {
                             if let Err(e) = app.write_all() {
                                 app.status = format!("error: {e:#}");
