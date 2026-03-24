@@ -422,36 +422,6 @@ impl App {
         find_chain(target, direct, &self.comp_deps, &self.base_names)
     }
 
-    /// If the cursor is on a `Transitive` cell, returns a human-readable string
-    /// describing the dependency chain, e.g.:
-    /// `"scaffold via: myproject → cli (base) → mcp → scaffold"`
-    /// Returns `None` if the cursor is not on a Transitive cell or if no chain
-    /// can be found.
-    pub fn transitive_chain_for_cursor(&self) -> Option<String> {
-        let r = self.cursor_row;
-        let c = self.cursor_col;
-        let state = self.cells.get(r)?.get(c).copied()?;
-        if state != DepState::Transitive {
-            return None;
-        }
-        let target = &self.rows.get(r)?.name;
-        let project_name = &self.cols.get(c)?.name;
-        let direct = self.project_direct_deps.get(c)?;
-        let chain = find_chain(target, direct, &self.comp_deps, &self.base_names)?;
-        // Format: "scaffold via: myproject → cli (base) → mcp → scaffold"
-        let steps: Vec<String> = chain
-            .iter()
-            .map(|name| {
-                if self.base_names.contains(name.as_str()) {
-                    format!("{} (base)", name)
-                } else {
-                    name.clone()
-                }
-            })
-            .collect();
-        let path_str = steps.join(" \u{2192} ");
-        Some(format!("{} via: {} \u{2192} {}", target, project_name, path_str))
-    }
 
     pub fn write_all(&mut self) -> Result<()> {
         let mut written = 0usize;
