@@ -113,6 +113,16 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
+    // Build chain position map: component name → 1-based step number
+    // Step 1 = direct-dep end (brightest), step N = hovered target (darkest)
+    let chain_positions: std::collections::HashMap<String, usize> = app
+        .chain_for_cursor()
+        .map(|chain| {
+            chain.into_iter().enumerate().map(|(i, name)| (name, i + 1)).collect()
+        })
+        .unwrap_or_default();
+    let chain_len = chain_positions.len();
+
     // ── Data rows ──────────────────────────────────────────────────────────
     let mut display_y = inner.y + header_rows;
     let bottom = inner.y + inner.height;
@@ -189,28 +199,63 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             let modified = app.modified_cols.get(col_i).copied().unwrap_or(false);
             let is_cursor = is_cursor_row && col_i == app.cursor_col;
 
-            let ch = match dep_state {
-                DepState::Direct => "x",
-                DepState::Transitive => "·",
-                DepState::None => "-",
-            };
-            let style = if is_cursor {
-                Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD)
+            // Chain highlighting: only in the cursor column, not on the cursor cell itself
+            let chain_pos = if col_i == app.cursor_col && !is_cursor {
+                let row_name = app.rows.get(row_i).map(|r| r.name.as_str()).unwrap_or("");
+                chain_positions.get(row_name).copied()
             } else {
-                match dep_state {
-                    DepState::Direct => {
-                        let base = Style::default().fg(Color::Green);
-                        if modified { base.add_modifier(Modifier::BOLD) } else { base }
-                    }
-                    DepState::Transitive => Style::default().fg(Color::Gray),
-                    DepState::None => Style::default().fg(Color::DarkGray),
-                }
+                None
+            };
+
+            let (ch, style) = if let Some(pos) = chain_pos {
+                // Step number character (1–9, or '+' if longer)
+                let digit = if pos <= 9 {
+                    char::from_digit(pos as u32, 10).unwrap_or('+')
+                } else {
+                    '+'
+                };
+                // Fade from bright cyan (step 1) to dark teal (last step)
+                let intensity = if chain_len > 1 {
+                    220u8.saturating_sub(((pos - 1) * 120 / (chain_len - 1)) as u8)
+                } else {
+                    220
+                };
+                let color = Color::Rgb(0, intensity, intensity);
+                (
+                    digit.to_string(),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                )
+            } else if is_cursor {
+                (
+                    match dep_state {
+                        DepState::Direct => "x".to_string(),
+                        DepState::Transitive => "·".to_string(),
+                        DepState::None => "-".to_string(),
+                    },
+                    Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD),
+                )
+            } else {
+                (
+                    match dep_state {
+                        DepState::Direct => "x".to_string(),
+                        DepState::Transitive => "·".to_string(),
+                        DepState::None => "-".to_string(),
+                    },
+                    match dep_state {
+                        DepState::Direct => {
+                            let base = Style::default().fg(Color::Green);
+                            if modified { base.add_modifier(Modifier::BOLD) } else { base }
+                        }
+                        DepState::Transitive => Style::default().fg(Color::Gray),
+                        DepState::None => Style::default().fg(Color::DarkGray),
+                    },
+                )
             };
 
             let x = inner.x + LABEL_WIDTH + sc as u16 * COL_WIDTH;
             if x < inner.x + inner.width {
                 let buf = frame.buffer_mut();
-                buf.set_string(x, display_y, ch, style);
+                buf.set_string(x, display_y, &ch, style);
             }
         }
 
@@ -255,11 +300,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         .zip(app.rows.get(app.cursor_row))
         .map(|(col, row)| format!("  [{}/{}]", col.name, row.name))
         .unwrap_or_default();
-    let status_text = if let Some(chain) = app.transitive_chain_for_cursor() {
-        format!("{}{}", chain, cursor_info)
-    } else {
-        format!("{}{}", app.status, cursor_info)
-    };
+    let status_text = format!("{}{}", app.status, cursor_info);
     frame.render_widget(
         Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray)),
         area,
