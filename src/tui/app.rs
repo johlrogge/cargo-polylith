@@ -63,6 +63,7 @@ pub struct App {
     pub input_buffer: String,
     pub pending_g: bool,
     pub confirm_quit: bool,
+    pub fold_active: bool,
     /// Component dependency graph — used to recompute transitive states on toggle.
     comp_deps: HashMap<String, Vec<String>>,
     /// Direct deps per project column (indexed by col).
@@ -171,6 +172,7 @@ impl App {
             input_buffer: String::new(),
             pending_g: false,
             confirm_quit: false,
+            fold_active: false,
             comp_deps,
             project_direct_deps,
             base_names,
@@ -181,15 +183,76 @@ impl App {
         self.rows.iter().filter(|r| r.kind == RowKind::Component).count()
     }
 
+    pub fn toggle_fold(&mut self) {
+        let is_transitive = self
+            .cells
+            .get(self.cursor_row)
+            .and_then(|r| r.get(self.cursor_col))
+            .copied()
+            == Some(DepState::Transitive);
+        if is_transitive {
+            self.fold_active = !self.fold_active;
+        }
+    }
+
+    fn current_cell_is_transitive(&self) -> bool {
+        self.cells
+            .get(self.cursor_row)
+            .and_then(|r| r.get(self.cursor_col))
+            .copied()
+            == Some(DepState::Transitive)
+    }
+
     pub fn move_up(&mut self) {
-        if self.cursor_row > 0 {
+        if self.fold_active {
+            // Gather chain names for skip logic
+            let chain_names: std::collections::HashSet<String> = self
+                .chain_for_cursor()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let mut r = self.cursor_row;
+            loop {
+                if r == 0 {
+                    break;
+                }
+                r -= 1;
+                if chain_names.contains(&self.rows[r].name) {
+                    self.cursor_row = r;
+                    break;
+                }
+            }
+        } else if self.cursor_row > 0 {
             self.cursor_row -= 1;
+        }
+        if !self.current_cell_is_transitive() {
+            self.fold_active = false;
         }
     }
 
     pub fn move_down(&mut self) {
-        if self.cursor_row + 1 < self.rows.len() {
+        if self.fold_active {
+            let chain_names: std::collections::HashSet<String> = self
+                .chain_for_cursor()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let mut r = self.cursor_row;
+            loop {
+                if r + 1 >= self.rows.len() {
+                    break;
+                }
+                r += 1;
+                if chain_names.contains(&self.rows[r].name) {
+                    self.cursor_row = r;
+                    break;
+                }
+            }
+        } else if self.cursor_row + 1 < self.rows.len() {
             self.cursor_row += 1;
+        }
+        if !self.current_cell_is_transitive() {
+            self.fold_active = false;
         }
     }
 
@@ -197,11 +260,17 @@ impl App {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
         }
+        if !self.current_cell_is_transitive() {
+            self.fold_active = false;
+        }
     }
 
     pub fn move_right(&mut self) {
         if self.cursor_col + 1 < self.cols.len() {
             self.cursor_col += 1;
+        }
+        if !self.current_cell_is_transitive() {
+            self.fold_active = false;
         }
     }
 

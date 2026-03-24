@@ -127,22 +127,84 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut display_y = inner.y + header_rows;
     let bottom = inner.y + inner.height;
 
-    for row_i in scroll_row..app.rows.len() {
+    // Fold state: compute visible row indices when fold is active
+    let fold_chain_names: std::collections::HashSet<String> = if app.fold_active {
+        app.chain_for_cursor()
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+    let is_fold_active = app.fold_active && !fold_chain_names.is_empty();
+
+    // Build display plan: alternating real rows and placeholder gaps
+    // (value, is_placeholder): for real rows value = row_index; for placeholders value = hidden count
+    let mut display_plan: Vec<(usize, bool)> = Vec::new();
+    if is_fold_active {
+        let mut hidden = 0usize;
+        for i in scroll_row..app.rows.len() {
+            if fold_chain_names.contains(&app.rows[i].name) {
+                if hidden > 0 {
+                    display_plan.push((hidden, true));
+                    hidden = 0;
+                }
+                display_plan.push((i, false));
+            } else {
+                hidden += 1;
+            }
+        }
+        if hidden > 0 {
+            display_plan.push((hidden, true));
+        }
+    } else {
+        for i in scroll_row..app.rows.len() {
+            display_plan.push((i, false));
+        }
+    }
+
+    // Track section headers emitted to avoid duplicates
+    let mut components_header_shown = false;
+    let mut bases_header_shown = false;
+
+    for (entry_val, is_placeholder) in display_plan {
+        if display_y >= bottom {
+            break;
+        }
+
+        if is_placeholder {
+            // Render a single dimmed placeholder row
+            let count = entry_val;
+            let text = format!("  \u{27e8}{count} rows hidden\u{27e9}");
+            let buf = frame.buffer_mut();
+            buf.set_string(
+                inner.x,
+                display_y,
+                &text,
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            );
+            display_y += 1;
+            continue;
+        }
+
+        let row_i = entry_val;
         let row_kind = app.rows[row_i].kind;
 
-        // Section header before first component (only when scroll_row is in or before component section)
-        if row_i == scroll_row && row_i < n_components && n_components > 0 {
+        // Section header before first component
+        if row_i < n_components && n_components > 0 && !components_header_shown {
             if display_y < bottom {
                 draw_section_header(frame, inner, display_y, "── components");
                 display_y += 1;
+                components_header_shown = true;
             }
         }
 
         // Section header before first base
-        if row_i == n_components && n_bases > 0 {
+        if row_i >= n_components && n_bases > 0 && !bases_header_shown {
             if display_y < bottom {
                 draw_section_header(frame, inner, display_y, "── bases");
                 display_y += 1;
+                bases_header_shown = true;
             }
         }
 
@@ -208,23 +270,30 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             };
 
             let (ch, style) = if let Some(pos) = chain_pos {
-                // Step number character (1–9, or '+' if longer)
-                let digit = if pos <= 9 {
-                    char::from_digit(pos as u32, 10).unwrap_or('+')
+                if pos == 1 {
+                    // Direct-dep entry point: light green bullet
+                    (
+                        "\u{25cf}".to_string(), // ●
+                        Style::default()
+                            .fg(Color::Rgb(150, 255, 150))
+                            .add_modifier(Modifier::BOLD),
+                    )
                 } else {
-                    '+'
-                };
-                // Fade from bright cyan (step 1) to dark teal (last step)
-                let intensity = if chain_len > 1 {
-                    220u8.saturating_sub(((pos - 1) * 120 / (chain_len - 1)) as u8)
-                } else {
-                    220
-                };
-                let color = Color::Rgb(0, intensity, intensity);
-                (
-                    digit.to_string(),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                )
+                    // Transitive hops: blue numbered starting at 1 (display = pos - 1)
+                    let display_step = pos - 1;
+                    let digit = if display_step <= 9 {
+                        char::from_digit(display_step as u32, 10).unwrap_or('+')
+                    } else {
+                        '+'
+                    };
+                    // Slight fade with each step
+                    let blue = 255u8.saturating_sub(((display_step.saturating_sub(1)) * 20) as u8);
+                    let color = Color::Rgb(80, 150, blue);
+                    (
+                        digit.to_string(),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    )
+                }
             } else if is_cursor {
                 (
                     match dep_state {
@@ -300,7 +369,8 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         .zip(app.rows.get(app.cursor_row))
         .map(|(col, row)| format!("  [{}/{}]", col.name, row.name))
         .unwrap_or_default();
-    let status_text = format!("{}{}", app.status, cursor_info);
+    let fold_hint = if app.fold_active { "  [f] unfold" } else { "" };
+    let status_text = format!("{}{}{}", app.status, cursor_info, fold_hint);
     frame.render_widget(
         Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray)),
         area,
