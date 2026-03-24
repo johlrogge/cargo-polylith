@@ -63,6 +63,7 @@ pub struct App {
     pub input_buffer: String,
     pub pending_g: bool,
     pub confirm_quit: bool,
+    pub fold_active: bool,
     /// Component dependency graph — used to recompute transitive states on toggle.
     comp_deps: HashMap<String, Vec<String>>,
     /// Direct deps per project column (indexed by col).
@@ -171,6 +172,7 @@ impl App {
             input_buffer: String::new(),
             pending_g: false,
             confirm_quit: false,
+            fold_active: false,
             comp_deps,
             project_direct_deps,
             base_names,
@@ -181,15 +183,82 @@ impl App {
         self.rows.iter().filter(|r| r.kind == RowKind::Component).count()
     }
 
+    pub fn toggle_fold(&mut self) {
+        let is_transitive = self
+            .cells
+            .get(self.cursor_row)
+            .and_then(|r| r.get(self.cursor_col))
+            .copied()
+            == Some(DepState::Transitive);
+        if is_transitive {
+            self.fold_active = !self.fold_active;
+        }
+    }
+
+    fn current_cell_is_transitive(&self) -> bool {
+        self.cells
+            .get(self.cursor_row)
+            .and_then(|r| r.get(self.cursor_col))
+            .copied()
+            == Some(DepState::Transitive)
+    }
+
     pub fn move_up(&mut self) {
-        if self.cursor_row > 0 {
+        if self.fold_active {
+            // Gather chain names (upstream + downstream) for skip logic
+            let mut chain_names: HashSet<String> = self
+                .chain_for_cursor()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            for level in self.downstream_levels_for_cursor() {
+                chain_names.extend(level);
+            }
+            let mut r = self.cursor_row;
+            loop {
+                if r == 0 {
+                    break;
+                }
+                r -= 1;
+                if chain_names.contains(&self.rows[r].name) {
+                    self.cursor_row = r;
+                    break;
+                }
+            }
+        } else if self.cursor_row > 0 {
             self.cursor_row -= 1;
+        }
+        if !self.current_cell_is_transitive() {
+            self.fold_active = false;
         }
     }
 
     pub fn move_down(&mut self) {
-        if self.cursor_row + 1 < self.rows.len() {
+        if self.fold_active {
+            let mut chain_names: HashSet<String> = self
+                .chain_for_cursor()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            for level in self.downstream_levels_for_cursor() {
+                chain_names.extend(level);
+            }
+            let mut r = self.cursor_row;
+            loop {
+                if r + 1 >= self.rows.len() {
+                    break;
+                }
+                r += 1;
+                if chain_names.contains(&self.rows[r].name) {
+                    self.cursor_row = r;
+                    break;
+                }
+            }
+        } else if self.cursor_row + 1 < self.rows.len() {
             self.cursor_row += 1;
+        }
+        if !self.current_cell_is_transitive() {
+            self.fold_active = false;
         }
     }
 
@@ -197,11 +266,17 @@ impl App {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
         }
+        if !self.current_cell_is_transitive() {
+            self.fold_active = false;
+        }
     }
 
     pub fn move_right(&mut self) {
         if self.cursor_col + 1 < self.cols.len() {
             self.cursor_col += 1;
+        }
+        if !self.current_cell_is_transitive() {
+            self.fold_active = false;
         }
     }
 
@@ -353,35 +428,56 @@ impl App {
         find_chain(target, direct, &self.comp_deps, &self.base_names)
     }
 
-    /// If the cursor is on a `Transitive` cell, returns a human-readable string
-    /// describing the dependency chain, e.g.:
-    /// `"scaffold via: myproject → cli (base) → mcp → scaffold"`
-    /// Returns `None` if the cursor is not on a Transitive cell or if no chain
-    /// can be found.
-    pub fn transitive_chain_for_cursor(&self) -> Option<String> {
+    /// Returns downstream BFS levels from the hovered cell.
+    /// Each inner Vec contains the names of components at that BFS distance from the cursor.
+    /// Only includes components that actually appear as rows in the grid.
+    /// Returns empty Vec if cursor is not on a Transitive cell.
+    pub fn downstream_levels_for_cursor(&self) -> Vec<Vec<String>> {
         let r = self.cursor_row;
         let c = self.cursor_col;
-        let state = self.cells.get(r)?.get(c).copied()?;
-        if state != DepState::Transitive {
-            return None;
+        if self.cells.get(r)
+            .and_then(|row| row.get(c))
+            .copied() != Some(DepState::Transitive) {
+            return vec![];
         }
-        let target = &self.rows.get(r)?.name;
-        let project_name = &self.cols.get(c)?.name;
-        let direct = self.project_direct_deps.get(c)?;
-        let chain = find_chain(target, direct, &self.comp_deps, &self.base_names)?;
-        // Format: "scaffold via: myproject → cli (base) → mcp → scaffold"
-        let steps: Vec<String> = chain
-            .iter()
-            .map(|name| {
-                if self.base_names.contains(name.as_str()) {
-                    format!("{} (base)", name)
-                } else {
-                    name.clone()
-                }
-            })
+        let hovered_name = match self.rows.get(r) {
+            Some(row) => row.name.clone(),
+            None => return vec![],
+        };
+        // BFS from hovered component outward through comp_deps
+        let row_names: HashSet<&str> = self.rows.iter()
+            .map(|r| r.name.as_str())
             .collect();
-        let path_str = steps.join(" \u{2192} ");
-        Some(format!("{} via: {} \u{2192} {}", target, project_name, path_str))
+        let mut levels: Vec<Vec<String>> = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert(hovered_name.clone());
+        let mut frontier: Vec<String> = self.comp_deps
+            .get(&hovered_name)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|n| row_names.contains(n.as_str()) && !visited.contains(n))
+            .collect();
+        frontier.sort(); // deterministic ordering
+        while !frontier.is_empty() {
+            for n in &frontier { visited.insert(n.clone()); }
+            let visible: Vec<String> = frontier.iter()
+                .filter(|n| row_names.contains(n.as_str()))
+                .cloned()
+                .collect();
+            if !visible.is_empty() {
+                levels.push(visible);
+            }
+            let mut next: Vec<String> = frontier.iter()
+                .flat_map(|n| self.comp_deps.get(n).cloned().unwrap_or_default())
+                .filter(|n| !visited.contains(n) && row_names.contains(n.as_str()))
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            next.sort();
+            frontier = next;
+        }
+        levels
     }
 
     pub fn write_all(&mut self) -> Result<()> {

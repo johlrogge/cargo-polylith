@@ -121,6 +121,7 @@ fn run_loop(
                             }
                         }
                         KeyCode::Char('i') => app.start_edit_interface(),
+                        KeyCode::Char('f') => { app.toggle_fold(); }
                         _ => {}
                     }
                 }

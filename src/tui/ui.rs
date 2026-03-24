@@ -113,36 +113,113 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Build chain position map: component name → 1-based step number
-    // Step 1 = direct-dep end (brightest), step N = hovered target (darkest)
-    let chain_positions: std::collections::HashMap<String, usize> = app
-        .chain_for_cursor()
-        .map(|chain| {
-            chain.into_iter().enumerate().map(|(i, name)| (name, i + 1)).collect()
-        })
-        .unwrap_or_default();
-    let chain_len = chain_positions.len();
+    // Build combined chain map: name → (is_upstream: bool, step: usize)
+    // Upstream: step 1 = direct dep, step 2 = first transitive hop, etc.
+    // Downstream: step 1 = first BFS level from cursor, etc.
+    let chain_upstream: Vec<String> = app.chain_for_cursor().unwrap_or_default();
+    let chain_down_levels: Vec<Vec<String>> = app.downstream_levels_for_cursor();
+
+    let mut chain_map: std::collections::HashMap<String, (bool, usize)> = std::collections::HashMap::new();
+    for (i, name) in chain_upstream.iter().enumerate() {
+        chain_map.insert(name.clone(), (true, i + 1));
+    }
+    for (level_idx, level) in chain_down_levels.iter().enumerate() {
+        for name in level {
+            chain_map.entry(name.clone()).or_insert((false, level_idx + 1));
+        }
+    }
 
     // ── Data rows ──────────────────────────────────────────────────────────
     let mut display_y = inner.y + header_rows;
     let bottom = inner.y + inner.height;
 
-    for row_i in scroll_row..app.rows.len() {
+    // Build fold plan: binary — chain rows shown, everything else hidden
+    let cursor_row_name = app.rows.get(app.cursor_row).map(|r| r.name.as_str()).unwrap_or("");
+
+    let fold_plan: Vec<crate::corsett::FoldEntry> = if app.fold_active && !chain_map.is_empty() {
+        // Sort chain rows in dependency order:
+        // 1. Upstream rows (step order: direct dep first)
+        // 2. Cursor row
+        // 3. Downstream rows (level order)
+        let mut upstream_by_step: Vec<(usize, usize)> = Vec::new(); // (step, row_idx)
+        let mut downstream_by_level: Vec<(usize, usize)> = Vec::new(); // (level, row_idx)
+        for (row_i, row) in app.rows.iter().enumerate() {
+            if row.name == cursor_row_name { continue; }
+            if let Some(&(is_upstream, step)) = chain_map.get(&row.name) {
+                if is_upstream {
+                    upstream_by_step.push((step, row_i));
+                } else {
+                    downstream_by_level.push((step, row_i));
+                }
+            }
+        }
+        upstream_by_step.sort_by_key(|&(step, _)| step);
+        downstream_by_level.sort_by_key(|&(level, _)| level);
+
+        let mut ordered_chain: Vec<usize> = Vec::new();
+        for (_, row_i) in upstream_by_step { ordered_chain.push(row_i); }
+        ordered_chain.push(app.cursor_row);
+        for (_, row_i) in downstream_by_level { ordered_chain.push(row_i); }
+
+        let chain_set: std::collections::HashSet<usize> = ordered_chain.iter().copied().collect();
+        let non_chain_count = app.rows.len().saturating_sub(chain_set.len());
+
+        let mut plan: Vec<crate::corsett::FoldEntry> = Vec::new();
+        if non_chain_count > 0 {
+            plan.push(crate::corsett::FoldEntry::Hidden(non_chain_count));
+        }
+        for row_i in ordered_chain {
+            plan.push(crate::corsett::FoldEntry::Row(row_i));
+        }
+        plan
+    } else {
+        (scroll_row..app.rows.len())
+            .map(crate::corsett::FoldEntry::Row)
+            .collect()
+    };
+
+    // Track section headers emitted to avoid duplicates
+    let mut components_header_shown = false;
+    let mut bases_header_shown = false;
+
+    for entry in fold_plan {
+        if display_y >= bottom {
+            break;
+        }
+
+        let row_i = match entry {
+            crate::corsett::FoldEntry::Hidden(count) => {
+                // Render a single dimmed placeholder row
+                let text = format!("  \u{27e8}{count} rows hidden\u{27e9}");
+                let buf = frame.buffer_mut();
+                buf.set_string(
+                    inner.x,
+                    display_y,
+                    &text,
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                );
+                display_y += 1;
+                continue;
+            }
+            crate::corsett::FoldEntry::Row(i) => i,
+        };
         let row_kind = app.rows[row_i].kind;
 
-        // Section header before first component (only when scroll_row is in or before component section)
-        if row_i == scroll_row && row_i < n_components && n_components > 0 {
+        // Section header before first component
+        if row_i < n_components && n_components > 0 && !components_header_shown {
             if display_y < bottom {
                 draw_section_header(frame, inner, display_y, "── components");
                 display_y += 1;
+                components_header_shown = true;
             }
         }
 
         // Section header before first base
-        if row_i == n_components && n_bases > 0 {
+        if row_i >= n_components && n_bases > 0 && !bases_header_shown {
             if display_y < bottom {
                 draw_section_header(frame, inner, display_y, "── bases");
                 display_y += 1;
+                bases_header_shown = true;
             }
         }
 
@@ -200,31 +277,52 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             let is_cursor = is_cursor_row && col_i == app.cursor_col;
 
             // Chain highlighting: only in the cursor column, not on the cursor cell itself
-            let chain_pos = if col_i == app.cursor_col && !is_cursor {
+            let chain_mark: Option<(bool, usize)> = if col_i == app.cursor_col && !is_cursor {
                 let row_name = app.rows.get(row_i).map(|r| r.name.as_str()).unwrap_or("");
-                chain_positions.get(row_name).copied()
+                chain_map.get(row_name).copied()
             } else {
                 None
             };
 
-            let (ch, style) = if let Some(pos) = chain_pos {
-                // Step number character (1–9, or '+' if longer)
-                let digit = if pos <= 9 {
-                    char::from_digit(pos as u32, 10).unwrap_or('+')
+            let (ch, style) = if let Some((is_upstream, step)) = chain_mark {
+                if is_upstream && step == 1 {
+                    // Direct-dep entry point: light green bullet
+                    (
+                        "\u{25cf}".to_string(), // ●
+                        Style::default()
+                            .fg(Color::Rgb(150, 255, 150))
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else if is_upstream {
+                    // Upstream transitive hops: blue numbered (display = step - 1)
+                    let display_step = step - 1;
+                    let digit = if display_step <= 9 {
+                        char::from_digit(display_step as u32, 10).unwrap_or('+')
+                    } else {
+                        '+'
+                    };
+                    // Slight fade with each step
+                    let blue = 255u8.saturating_sub(((display_step.saturating_sub(1)) * 20) as u8);
+                    let color = Color::Rgb(80, 150, blue);
+                    (
+                        digit.to_string(),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    )
                 } else {
-                    '+'
-                };
-                // Fade from bright cyan (step 1) to dark teal (last step)
-                let intensity = if chain_len > 1 {
-                    220u8.saturating_sub(((pos - 1) * 120 / (chain_len - 1)) as u8)
-                } else {
-                    220
-                };
-                let color = Color::Rgb(0, intensity, intensity);
-                (
-                    digit.to_string(),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                )
+                    // Downstream: same step number shared across parallel deps, warmer blue-cyan
+                    let digit = if step <= 9 {
+                        char::from_digit(step as u32, 10).unwrap_or('+')
+                    } else {
+                        '+'
+                    };
+                    let intensity = 220u8.saturating_sub((step.saturating_sub(1) * 30) as u8);
+                    (
+                        digit.to_string(),
+                        Style::default()
+                            .fg(Color::Rgb(80, intensity, 200))
+                            .add_modifier(Modifier::BOLD),
+                    )
+                }
             } else if is_cursor {
                 (
                     match dep_state {
@@ -300,7 +398,12 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         .zip(app.rows.get(app.cursor_row))
         .map(|(col, row)| format!("  [{}/{}]", col.name, row.name))
         .unwrap_or_default();
-    let status_text = format!("{}{}", app.status, cursor_info);
+    let fold_hint = if app.fold_active {
+        "  [f] unfold"
+    } else {
+        ""
+    };
+    let status_text = format!("{}{}{}", app.status, cursor_info, fold_hint);
     frame.render_widget(
         Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray)),
         area,
