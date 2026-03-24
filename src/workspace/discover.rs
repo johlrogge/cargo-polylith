@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use cargo_toml::Manifest;
 
-use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
+use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, RootDemotionPlan, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
 
 /// Resolve the workspace root: use `override_root` if given, otherwise walk
 /// up from `start` searching for a `Polylith.toml` or `Cargo.toml` with `[workspace]`.
@@ -118,34 +118,9 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
                     .and_then(|d| d.as_table())
                 {
                     for (key, val) in ws_deps.iter() {
-                        let path = val
-                            .as_value()
-                            .and_then(|v| v.as_inline_table())
-                            .and_then(|it| it.get("path"))
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                val.as_table()
-                                    .and_then(|t| t.get("path"))
-                                    .and_then(|v| v.as_value())
-                                    .and_then(|v| v.as_str())
-                            });
-                        if let Some(path) = path {
-                            let package = val
-                                .as_value()
-                                .and_then(|v| v.as_inline_table())
-                                .and_then(|it| it.get("package"))
-                                .and_then(|v| v.as_str())
-                                .or_else(|| {
-                                    val.as_table()
-                                        .and_then(|t| t.get("package"))
-                                        .and_then(|v| v.as_value())
-                                        .and_then(|v| v.as_str())
-                                })
-                                .map(|s| s.to_string());
-                            map.insert(key.to_string(), WorkspacePathDep {
-                                path: path.to_string(),
-                                package,
-                            });
+                        if let Some(path) = toml_str(val, "path") {
+                            let package = toml_str(val, "package");
+                            map.insert(key.to_string(), WorkspacePathDep { path, package });
                         }
                     }
                 }
@@ -194,6 +169,112 @@ pub fn read_polylith_toml(root: &Path) -> Result<PolylithToml> {
         .ok_or_else(|| anyhow::anyhow!("Polylith.toml not found at {}", root.display()))
 }
 
+/// Analyse the root workspace and produce a `RootDemotionPlan` — pure read, no writes.
+///
+/// Reads root `Cargo.toml` to extract `[workspace.package]` metadata and non-path
+/// `[workspace.dependencies]`, then scans `profiles/*.profile` for profile names.
+/// Returns a plan that `scaffold::execute_root_demotion` can consume.
+pub fn plan_root_demotion(root: &Path) -> Result<RootDemotionPlan> {
+    use std::collections::HashMap;
+
+    let manifest_path = root.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let doc: toml_edit::DocumentMut = content.parse()
+        .with_context(|| "parsing root Cargo.toml")?;
+
+    // Extract [workspace.package] fields
+    let version = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let edition = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("edition"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let authors: Vec<String> = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("authors"))
+        .and_then(|v| v.as_value())
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    let license = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("license"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let repository = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("repository"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let has_package_meta = version.is_some() || edition.is_some() || !authors.is_empty()
+        || license.is_some() || repository.is_some();
+
+    let workspace_package = if has_package_meta {
+        Some(WorkspacePackageMeta { version, edition, authors, license, repository })
+    } else {
+        None
+    };
+
+    // Extract non-path deps from [workspace.dependencies]
+    let mut libraries: HashMap<String, ExternalDepInfo> = HashMap::new();
+    if let Some(ws_deps) = doc
+        .get("workspace")
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        for (key, val) in ws_deps.iter() {
+            // Skip path deps — they are interface wiring, not libraries
+            let has_path = val
+                .as_value()
+                .and_then(|v| v.as_inline_table())
+                .and_then(|it| it.get("path"))
+                .is_some()
+                || val.as_table().and_then(|t| t.get("path")).is_some();
+            if has_path {
+                continue;
+            }
+            let version = parse_version_from_item(val);
+            let mut features = parse_features_from_item(val);
+            features.sort();
+            let raw = Some(render_dep_item_raw(val));
+            libraries.insert(key.to_string(), ExternalDepInfo { version, features, raw });
+        }
+    }
+
+    // Discover existing profile names from profiles/*.profile
+    let profiles_dir = root.join("profiles");
+    let mut profiles: HashMap<String, String> = HashMap::new();
+    if profiles_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&profiles_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("profile") {
+                    continue;
+                }
+                if let Some(name) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) {
+                    profiles.insert(
+                        name.clone(),
+                        format!("profiles/{}.profile", name),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(RootDemotionPlan { workspace_package, libraries, profiles })
+}
+
 /// Parse `Polylith.toml` from the given root directory, returning `None` if not present.
 fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
     let path = root.join("Polylith.toml");
@@ -239,9 +320,7 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
     if let Some(libs) = doc.get("libraries").and_then(|t| t.as_table()) {
         for (k, v) in libs.iter() {
             // Skip path deps
-            let has_path = v.as_value().and_then(|v| v.as_inline_table()).and_then(|it| it.get("path")).is_some()
-                || v.as_table().and_then(|t| t.get("path")).is_some();
-            if has_path {
+            if toml_str(v, "path").is_some() {
                 continue;
             }
             let version = parse_version_from_item(v);
@@ -327,25 +406,8 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
             let mut keys = vec![];
             if let Some(deps_table) = doc.get("dependencies").and_then(|d| d.as_table()) {
                 for (k, v) in deps_table.iter() {
-                    let has_path = v
-                        .as_value()
-                        .and_then(|v| v.as_inline_table())
-                        .and_then(|it| it.get("path"))
-                        .is_some()
-                        || v.as_table()
-                            .and_then(|t| t.get("path"))
-                            .is_some();
-                    let is_workspace = v
-                        .as_value()
-                        .and_then(|v| v.as_inline_table())
-                        .and_then(|it| it.get("workspace"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                        || v.as_table()
-                            .and_then(|t| t.get("workspace"))
-                            .and_then(|v| v.as_value())
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
+                    let has_path = toml_str(v, "path").is_some();
+                    let is_workspace = toml_bool(v, "workspace").unwrap_or(false);
                     if has_path && !is_workspace {
                         keys.push(k.to_string());
                     }
@@ -367,28 +429,43 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
     Ok(bricks)
 }
 
+/// Extract a string value from a TOML item by key, handling both inline tables
+/// (`foo = { key = "val" }`) and regular tables (`[dep]\nkey = "val"`).
+fn toml_str(item: &toml_edit::Item, key: &str) -> Option<String> {
+    item.as_value()
+        .and_then(|v| v.as_inline_table())
+        .and_then(|t| t.get(key))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            item.as_table()
+                .and_then(|t| t.get(key))
+                .and_then(|i| i.as_value())
+                .and_then(|v| v.as_str())
+        })
+        .map(|s| s.to_string())
+}
+
+/// Extract a bool value from a TOML item by key (inline or regular table).
+fn toml_bool(item: &toml_edit::Item, key: &str) -> Option<bool> {
+    item.as_value()
+        .and_then(|v| v.as_inline_table())
+        .and_then(|t| t.get(key))
+        .and_then(|v| v.as_bool())
+        .or_else(|| {
+            item.as_table()
+                .and_then(|t| t.get(key))
+                .and_then(|i| i.as_value())
+                .and_then(|v| v.as_bool())
+        })
+}
+
 fn parse_version_from_item(v: &toml_edit::Item) -> Option<String> {
     // bare string: `serde = "1.0"`
     if let Some(s) = v.as_value().and_then(|v| v.as_str()) {
         if s != "*" { return Some(s.to_string()); }
         return None;
     }
-    // inline table
-    let from_inline = v
-        .as_value()
-        .and_then(|v| v.as_inline_table())
-        .and_then(|it| it.get("version"))
-        .and_then(|v| v.as_str())
-        .filter(|s| *s != "*")
-        .map(|s| s.to_string());
-    if from_inline.is_some() { return from_inline; }
-    // regular table
-    v.as_table()
-        .and_then(|t| t.get("version"))
-        .and_then(|v| v.as_value())
-        .and_then(|v| v.as_str())
-        .filter(|s| *s != "*")
-        .map(|s| s.to_string())
+    toml_str(v, "version").filter(|s| s != "*")
 }
 
 /// Render a toml_edit Item as a raw TOML value string suitable for use as a dep spec.
@@ -471,43 +548,15 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
         // the key is just a local alias. This applies to both [dependencies] and
         // [workspace.dependencies].
         let resolve_pkg_name = |k: &str, v: &toml_edit::Item| -> String {
-            let pkg = v
-                .as_value()
-                .and_then(|v| v.as_inline_table())
-                .and_then(|it| it.get("package"))
-                .and_then(|v| v.as_str())
-                .or_else(|| {
-                    v.as_table()
-                        .and_then(|t| t.get("package"))
-                        .and_then(|v| v.as_value())
-                        .and_then(|v| v.as_str())
-                });
-            pkg.unwrap_or(k).to_string()
+            toml_str(v, "package").unwrap_or_else(|| k.to_string())
         };
         // Helper: extract the `path = "..."` value from a dep item (inline table or regular table).
         let extract_path = |v: &toml_edit::Item| -> Option<String> {
-            v.as_value()
-                .and_then(|v| v.as_inline_table())
-                .and_then(|it| it.get("path"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    v.as_table()
-                        .and_then(|t| t.get("path"))
-                        .and_then(|v| v.as_value())
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                })
+            toml_str(v, "path")
         };
         // Helper: check whether a dep item has an explicit `package = "..."` alias.
         let has_package_alias = |v: &toml_edit::Item| -> bool {
-            v.as_value()
-                .and_then(|v| v.as_inline_table())
-                .and_then(|it| it.get("package"))
-                .is_some()
-                || v.as_table()
-                    .and_then(|t| t.get("package"))
-                    .is_some()
+            toml_str(v, "package").is_some()
         };
         let mut dep_set: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut dep_paths: Vec<(String, PathBuf)> = vec![];
@@ -516,16 +565,7 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
 
         // Helper: check whether a dep item has `workspace = true`.
         let is_workspace_dep = |v: &toml_edit::Item| -> bool {
-            v.as_value()
-                .and_then(|v| v.as_inline_table())
-                .and_then(|it| it.get("workspace"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-                || v.as_table()
-                    .and_then(|t| t.get("workspace"))
-                    .and_then(|v| v.as_value())
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
+            toml_bool(v, "workspace").unwrap_or(false)
         };
 
         let extract_version = |v: &toml_edit::Item| parse_version_from_item(v);

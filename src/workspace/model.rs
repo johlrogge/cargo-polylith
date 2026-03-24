@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -25,7 +23,7 @@ pub struct PolylithToml {
     pub profiles: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrickKind {
     Component,
@@ -76,6 +74,7 @@ pub struct Project {
     /// Projects must be plain bin crates in the root workspace, not sub-workspaces.
     pub has_own_workspace: bool,
     /// The `name` field from the first `[[bin]]` entry in the project's Cargo.toml, if any.
+    #[allow(dead_code)] // populated during discovery; reserved for future use in output commands
     pub bin_name: Option<String>,
     /// Raw path dependencies: (dep_key, resolved_absolute_path). Used to validate
     /// that dep keys match the target package name. Only populated for deps that
@@ -120,6 +119,19 @@ pub struct WorkspaceMap {
     pub root_workspace_interface_deps: HashMap<String, WorkspacePathDep>,
     /// Parsed `Polylith.toml` if present at root, `None` for legacy workspaces.
     pub polylith_toml: Option<PolylithToml>,
+}
+
+/// Plan produced by analysing the root workspace before migration.
+/// Computed by `workspace::plan_root_demotion`; consumed by `scaffold::execute_root_demotion`.
+#[derive(Debug, Clone)]
+pub struct RootDemotionPlan {
+    /// Extracted [workspace.package] metadata for Polylith.toml
+    pub workspace_package: Option<WorkspacePackageMeta>,
+    /// External (non-path) library deps for Polylith.toml [libraries].
+    /// Each entry has `raw` populated for verbatim TOML rendering.
+    pub libraries: HashMap<String, ExternalDepInfo>,
+    /// Profile names discovered in profiles/ → relative path
+    pub profiles: HashMap<String, String>,
 }
 
 /// The fully resolved data needed to generate a profile workspace Cargo.toml.

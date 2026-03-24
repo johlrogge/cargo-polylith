@@ -5,7 +5,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use super::app::{App, DepState, InputMode, RowKind};
+use crate::corsett::FoldEntry;
+use super::app::{App, ChainPosition, DepState, InputMode, RowKind};
 
 const IFACE_WIDTH: u16 = 16; // interface label column (left)
 const IMPL_WIDTH: u16 = 22;  // component/base name column
@@ -113,21 +114,30 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Build combined chain map: name → (is_upstream: bool, step: usize)
-    // Upstream: step 1 = direct dep, step 2 = first transitive hop, etc.
-    // Downstream: step 1 = first BFS level from cursor, etc.
+    // Build combined chain map: name → ChainPosition
     let chain_upstream: Vec<String> = app.chain_for_cursor().unwrap_or_default();
     let chain_down_levels: Vec<Vec<String>> = app.downstream_levels_for_cursor();
 
-    let mut chain_map: std::collections::HashMap<String, (bool, usize)> = std::collections::HashMap::new();
+    let mut chain_map: std::collections::HashMap<String, ChainPosition> = std::collections::HashMap::new();
     for (i, name) in chain_upstream.iter().enumerate() {
-        chain_map.insert(name.clone(), (true, i + 1));
+        chain_map.insert(name.clone(), ChainPosition::Upstream { step: i + 1 });
     }
     for (level_idx, level) in chain_down_levels.iter().enumerate() {
         for name in level {
-            chain_map.entry(name.clone()).or_insert((false, level_idx + 1));
+            chain_map.entry(name.clone()).or_insert(ChainPosition::Downstream { level: level_idx + 1 });
         }
     }
+
+    // Interfaces with 2+ implementations → radio-button rendering
+    let multi_impl_interfaces: std::collections::HashSet<&str> = {
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for row in &app.rows {
+            if let Some(iface) = row.interface.as_deref() {
+                *counts.entry(iface).or_insert(0) += 1;
+            }
+        }
+        counts.into_iter().filter(|&(_, n)| n >= 2).map(|(k, _)| k).collect()
+    };
 
     // ── Data rows ──────────────────────────────────────────────────────────
     let mut display_y = inner.y + header_rows;
@@ -136,7 +146,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     // Build fold plan: binary — chain rows shown, everything else hidden
     let cursor_row_name = app.rows.get(app.cursor_row).map(|r| r.name.as_str()).unwrap_or("");
 
-    let fold_plan: Vec<crate::corsett::FoldEntry> = if app.fold_active && !chain_map.is_empty() {
+    let fold_plan: Vec<FoldEntry> = if app.fold_active && !chain_map.is_empty() {
         // Sort chain rows in dependency order:
         // 1. Upstream rows (step order: direct dep first)
         // 2. Cursor row
@@ -145,12 +155,14 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut downstream_by_level: Vec<(usize, usize)> = Vec::new(); // (level, row_idx)
         for (row_i, row) in app.rows.iter().enumerate() {
             if row.name == cursor_row_name { continue; }
-            if let Some(&(is_upstream, step)) = chain_map.get(&row.name) {
-                if is_upstream {
+            match chain_map.get(&row.name).copied() {
+                Some(ChainPosition::Upstream { step }) => {
                     upstream_by_step.push((step, row_i));
-                } else {
-                    downstream_by_level.push((step, row_i));
                 }
+                Some(ChainPosition::Downstream { level }) => {
+                    downstream_by_level.push((level, row_i));
+                }
+                None => {}
             }
         }
         upstream_by_step.sort_by_key(|&(step, _)| step);
@@ -164,17 +176,17 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         let chain_set: std::collections::HashSet<usize> = ordered_chain.iter().copied().collect();
         let non_chain_count = app.rows.len().saturating_sub(chain_set.len());
 
-        let mut plan: Vec<crate::corsett::FoldEntry> = Vec::new();
+        let mut plan: Vec<FoldEntry> = Vec::new();
         if non_chain_count > 0 {
-            plan.push(crate::corsett::FoldEntry::Hidden(non_chain_count));
+            plan.push(FoldEntry::Hidden(non_chain_count));
         }
         for row_i in ordered_chain {
-            plan.push(crate::corsett::FoldEntry::Row(row_i));
+            plan.push(FoldEntry::Row(row_i));
         }
         plan
     } else {
         (scroll_row..app.rows.len())
-            .map(crate::corsett::FoldEntry::Row)
+            .map(FoldEntry::Row)
             .collect()
     };
 
@@ -188,7 +200,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         let row_i = match entry {
-            crate::corsett::FoldEntry::Hidden(count) => {
+            FoldEntry::Hidden(count) => {
                 // Render a single dimmed placeholder row
                 let text = format!("  \u{27e8}{count} rows hidden\u{27e9}");
                 let buf = frame.buffer_mut();
@@ -201,7 +213,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
                 display_y += 1;
                 continue;
             }
-            crate::corsett::FoldEntry::Row(i) => i,
+            FoldEntry::Row(i) => i,
         };
         let row_kind = app.rows[row_i].kind;
 
@@ -277,51 +289,55 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             let is_cursor = is_cursor_row && col_i == app.cursor_col;
 
             // Chain highlighting: only in the cursor column, not on the cursor cell itself
-            let chain_mark: Option<(bool, usize)> = if col_i == app.cursor_col && !is_cursor {
+            let chain_mark: Option<ChainPosition> = if col_i == app.cursor_col && !is_cursor {
                 let row_name = app.rows.get(row_i).map(|r| r.name.as_str()).unwrap_or("");
                 chain_map.get(row_name).copied()
             } else {
                 None
             };
 
-            let (ch, style) = if let Some((is_upstream, step)) = chain_mark {
-                if is_upstream && step == 1 {
-                    // Direct-dep entry point: light green bullet
-                    (
-                        "\u{25cf}".to_string(), // ●
-                        Style::default()
-                            .fg(Color::Rgb(150, 255, 150))
-                            .add_modifier(Modifier::BOLD),
-                    )
-                } else if is_upstream {
-                    // Upstream transitive hops: blue numbered (display = step - 1)
-                    let display_step = step - 1;
-                    let digit = if display_step <= 9 {
-                        char::from_digit(display_step as u32, 10).unwrap_or('+')
-                    } else {
-                        '+'
-                    };
-                    // Slight fade with each step
-                    let blue = 255u8.saturating_sub(((display_step.saturating_sub(1)) * 20) as u8);
-                    let color = Color::Rgb(80, 150, blue);
-                    (
-                        digit.to_string(),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    )
-                } else {
-                    // Downstream: same step number shared across parallel deps, warmer blue-cyan
-                    let digit = if step <= 9 {
-                        char::from_digit(step as u32, 10).unwrap_or('+')
-                    } else {
-                        '+'
-                    };
-                    let intensity = 220u8.saturating_sub((step.saturating_sub(1) * 30) as u8);
-                    (
-                        digit.to_string(),
-                        Style::default()
-                            .fg(Color::Rgb(80, intensity, 200))
-                            .add_modifier(Modifier::BOLD),
-                    )
+            let (ch, style) = if let Some(pos) = chain_mark {
+                match pos {
+                    ChainPosition::Upstream { step } if step == 1 => {
+                        // Direct-dep entry point: light green bullet
+                        (
+                            "\u{25cf}".to_string(), // ●
+                            Style::default()
+                                .fg(Color::Rgb(150, 255, 150))
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    }
+                    ChainPosition::Upstream { step } => {
+                        // Upstream transitive hops: blue numbered (display = step - 1)
+                        let display_step = step - 1;
+                        let digit = if display_step <= 9 {
+                            char::from_digit(display_step as u32, 10).unwrap_or('+')
+                        } else {
+                            '+'
+                        };
+                        // Slight fade with each step
+                        let blue = 255u8.saturating_sub(((display_step.saturating_sub(1)) * 20) as u8);
+                        let color = Color::Rgb(80, 150, blue);
+                        (
+                            digit.to_string(),
+                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        )
+                    }
+                    ChainPosition::Downstream { level } => {
+                        // Downstream: same level number shared across parallel deps, warmer blue-cyan
+                        let digit = if level <= 9 {
+                            char::from_digit(level as u32, 10).unwrap_or('+')
+                        } else {
+                            '+'
+                        };
+                        let intensity = 220u8.saturating_sub((level.saturating_sub(1) * 30) as u8);
+                        (
+                            digit.to_string(),
+                            Style::default()
+                                .fg(Color::Rgb(80, intensity, 200))
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    }
                 }
             } else if is_cursor {
                 (
@@ -333,21 +349,37 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD),
                 )
             } else {
-                (
-                    match dep_state {
-                        DepState::Direct => "x".to_string(),
-                        DepState::Transitive => "·".to_string(),
-                        DepState::None => "-".to_string(),
-                    },
-                    match dep_state {
-                        DepState::Direct => {
-                            let base = Style::default().fg(Color::Green);
-                            if modified { base.add_modifier(Modifier::BOLD) } else { base }
-                        }
-                        DepState::Transitive => Style::default().fg(Color::Gray),
-                        DepState::None => Style::default().fg(Color::DarkGray),
-                    },
-                )
+                // Radio-button rendering for multi-implementation interface groups
+                let is_radio = app.rows.get(row_i)
+                    .and_then(|r| r.interface.as_deref())
+                    .map(|iface| multi_impl_interfaces.contains(iface))
+                    .unwrap_or(false);
+
+                match (dep_state, is_radio) {
+                    (DepState::Direct, true) => (
+                        "\u{25c9}".to_string(), // ◉
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    ),
+                    (DepState::None, true) => (
+                        "\u{25cb}".to_string(), // ○
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    _ => (
+                        match dep_state {
+                            DepState::Direct => "x".to_string(),
+                            DepState::Transitive => "·".to_string(),
+                            DepState::None => "-".to_string(),
+                        },
+                        match dep_state {
+                            DepState::Direct => {
+                                let base = Style::default().fg(Color::Green);
+                                if modified { base.add_modifier(Modifier::BOLD) } else { base }
+                            }
+                            DepState::Transitive => Style::default().fg(Color::Gray),
+                            DepState::None => Style::default().fg(Color::DarkGray),
+                        },
+                    ),
+                }
             };
 
             let x = inner.x + LABEL_WIDTH + sc as u16 * COL_WIDTH;
@@ -411,6 +443,6 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { s } else { &s[..max] }
+    s.char_indices().nth(max).map_or(s, |(i, _)| &s[..i])
 }
 
