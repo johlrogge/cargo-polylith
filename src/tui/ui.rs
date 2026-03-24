@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use crate::corsett::FoldEntry;
-use super::app::{App, DepState, InputMode, RowKind};
+use super::app::{App, ChainPosition, DepState, InputMode, RowKind};
 
 const IFACE_WIDTH: u16 = 16; // interface label column (left)
 const IMPL_WIDTH: u16 = 22;  // component/base name column
@@ -114,19 +114,17 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Build combined chain map: name → (is_upstream: bool, step: usize)
-    // Upstream: step 1 = direct dep, step 2 = first transitive hop, etc.
-    // Downstream: step 1 = first BFS level from cursor, etc.
+    // Build combined chain map: name → ChainPosition
     let chain_upstream: Vec<String> = app.chain_for_cursor().unwrap_or_default();
     let chain_down_levels: Vec<Vec<String>> = app.downstream_levels_for_cursor();
 
-    let mut chain_map: std::collections::HashMap<String, (bool, usize)> = std::collections::HashMap::new();
+    let mut chain_map: std::collections::HashMap<String, ChainPosition> = std::collections::HashMap::new();
     for (i, name) in chain_upstream.iter().enumerate() {
-        chain_map.insert(name.clone(), (true, i + 1));
+        chain_map.insert(name.clone(), ChainPosition::Upstream { step: i + 1 });
     }
     for (level_idx, level) in chain_down_levels.iter().enumerate() {
         for name in level {
-            chain_map.entry(name.clone()).or_insert((false, level_idx + 1));
+            chain_map.entry(name.clone()).or_insert(ChainPosition::Downstream { level: level_idx + 1 });
         }
     }
 
@@ -157,12 +155,14 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut downstream_by_level: Vec<(usize, usize)> = Vec::new(); // (level, row_idx)
         for (row_i, row) in app.rows.iter().enumerate() {
             if row.name == cursor_row_name { continue; }
-            if let Some(&(is_upstream, step)) = chain_map.get(&row.name) {
-                if is_upstream {
+            match chain_map.get(&row.name).copied() {
+                Some(ChainPosition::Upstream { step }) => {
                     upstream_by_step.push((step, row_i));
-                } else {
-                    downstream_by_level.push((step, row_i));
                 }
+                Some(ChainPosition::Downstream { level }) => {
+                    downstream_by_level.push((level, row_i));
+                }
+                None => {}
             }
         }
         upstream_by_step.sort_by_key(|&(step, _)| step);
@@ -289,51 +289,55 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             let is_cursor = is_cursor_row && col_i == app.cursor_col;
 
             // Chain highlighting: only in the cursor column, not on the cursor cell itself
-            let chain_mark: Option<(bool, usize)> = if col_i == app.cursor_col && !is_cursor {
+            let chain_mark: Option<ChainPosition> = if col_i == app.cursor_col && !is_cursor {
                 let row_name = app.rows.get(row_i).map(|r| r.name.as_str()).unwrap_or("");
                 chain_map.get(row_name).copied()
             } else {
                 None
             };
 
-            let (ch, style) = if let Some((is_upstream, step)) = chain_mark {
-                if is_upstream && step == 1 {
-                    // Direct-dep entry point: light green bullet
-                    (
-                        "\u{25cf}".to_string(), // ●
-                        Style::default()
-                            .fg(Color::Rgb(150, 255, 150))
-                            .add_modifier(Modifier::BOLD),
-                    )
-                } else if is_upstream {
-                    // Upstream transitive hops: blue numbered (display = step - 1)
-                    let display_step = step - 1;
-                    let digit = if display_step <= 9 {
-                        char::from_digit(display_step as u32, 10).unwrap_or('+')
-                    } else {
-                        '+'
-                    };
-                    // Slight fade with each step
-                    let blue = 255u8.saturating_sub(((display_step.saturating_sub(1)) * 20) as u8);
-                    let color = Color::Rgb(80, 150, blue);
-                    (
-                        digit.to_string(),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    )
-                } else {
-                    // Downstream: same step number shared across parallel deps, warmer blue-cyan
-                    let digit = if step <= 9 {
-                        char::from_digit(step as u32, 10).unwrap_or('+')
-                    } else {
-                        '+'
-                    };
-                    let intensity = 220u8.saturating_sub((step.saturating_sub(1) * 30) as u8);
-                    (
-                        digit.to_string(),
-                        Style::default()
-                            .fg(Color::Rgb(80, intensity, 200))
-                            .add_modifier(Modifier::BOLD),
-                    )
+            let (ch, style) = if let Some(pos) = chain_mark {
+                match pos {
+                    ChainPosition::Upstream { step } if step == 1 => {
+                        // Direct-dep entry point: light green bullet
+                        (
+                            "\u{25cf}".to_string(), // ●
+                            Style::default()
+                                .fg(Color::Rgb(150, 255, 150))
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    }
+                    ChainPosition::Upstream { step } => {
+                        // Upstream transitive hops: blue numbered (display = step - 1)
+                        let display_step = step - 1;
+                        let digit = if display_step <= 9 {
+                            char::from_digit(display_step as u32, 10).unwrap_or('+')
+                        } else {
+                            '+'
+                        };
+                        // Slight fade with each step
+                        let blue = 255u8.saturating_sub(((display_step.saturating_sub(1)) * 20) as u8);
+                        let color = Color::Rgb(80, 150, blue);
+                        (
+                            digit.to_string(),
+                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        )
+                    }
+                    ChainPosition::Downstream { level } => {
+                        // Downstream: same level number shared across parallel deps, warmer blue-cyan
+                        let digit = if level <= 9 {
+                            char::from_digit(level as u32, 10).unwrap_or('+')
+                        } else {
+                            '+'
+                        };
+                        let intensity = 220u8.saturating_sub((level.saturating_sub(1) * 30) as u8);
+                        (
+                            digit.to_string(),
+                            Style::default()
+                                .fg(Color::Rgb(80, intensity, 200))
+                                .add_modifier(Modifier::BOLD),
+                        )
+                    }
                 }
             } else if is_cursor {
                 (

@@ -26,6 +26,18 @@ pub enum DepState {
     Direct,
 }
 
+/// Position of a cell within the hover chain visualization.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ChainPosition {
+    /// Part of the upstream path from a direct dependency to the hovered cell.
+    /// `step = 1` is the direct dependency entry point.
+    Upstream { step: usize },
+    /// Downstream from the hovered cell — a component it depends on.
+    /// `level = 1` is a direct dependency of the hovered cell.
+    /// Components at the same BFS level share the same number.
+    Downstream { level: usize },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputMode {
     Normal,
