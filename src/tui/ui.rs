@@ -127,67 +127,55 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut display_y = inner.y + header_rows;
     let bottom = inner.y + inner.height;
 
-    // Fold state: compute visible row indices when fold is active
-    let fold_chain_names: std::collections::HashSet<String> = if app.fold_active {
+    // Compute fold plan using corsett
+    let chain_row_indices: std::collections::HashSet<usize> = if app.fold_active {
         app.chain_for_cursor()
             .unwrap_or_default()
-            .into_iter()
+            .iter()
+            .filter_map(|name| app.rows.iter().position(|r| &r.name == name))
             .collect()
     } else {
         std::collections::HashSet::new()
     };
-    let is_fold_active = app.fold_active && !fold_chain_names.is_empty();
 
-    // Build display plan: alternating real rows and placeholder gaps
-    // (value, is_placeholder): for real rows value = row_index; for placeholders value = hidden count
-    let mut display_plan: Vec<(usize, bool)> = Vec::new();
-    if is_fold_active {
-        let mut hidden = 0usize;
-        for i in scroll_row..app.rows.len() {
-            if fold_chain_names.contains(&app.rows[i].name) {
-                if hidden > 0 {
-                    display_plan.push((hidden, true));
-                    hidden = 0;
-                }
-                display_plan.push((i, false));
-            } else {
-                hidden += 1;
-            }
-        }
-        if hidden > 0 {
-            display_plan.push((hidden, true));
-        }
+    let fold_plan = if app.fold_active && !chain_row_indices.is_empty() {
+        crate::corsett::fold_to_height(
+            app.rows.len(),
+            &chain_row_indices,
+            (bottom - display_y) as usize, // available display rows
+            scroll_row,
+        )
     } else {
-        for i in scroll_row..app.rows.len() {
-            display_plan.push((i, false));
-        }
-    }
+        (scroll_row..app.rows.len())
+            .map(crate::corsett::FoldEntry::Row)
+            .collect()
+    };
 
     // Track section headers emitted to avoid duplicates
     let mut components_header_shown = false;
     let mut bases_header_shown = false;
 
-    for (entry_val, is_placeholder) in display_plan {
+    for entry in fold_plan {
         if display_y >= bottom {
             break;
         }
 
-        if is_placeholder {
-            // Render a single dimmed placeholder row
-            let count = entry_val;
-            let text = format!("  \u{27e8}{count} rows hidden\u{27e9}");
-            let buf = frame.buffer_mut();
-            buf.set_string(
-                inner.x,
-                display_y,
-                &text,
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-            );
-            display_y += 1;
-            continue;
-        }
-
-        let row_i = entry_val;
+        let row_i = match entry {
+            crate::corsett::FoldEntry::Hidden(count) => {
+                // Render a single dimmed placeholder row
+                let text = format!("  \u{27e8}{count} rows hidden\u{27e9}");
+                let buf = frame.buffer_mut();
+                buf.set_string(
+                    inner.x,
+                    display_y,
+                    &text,
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                );
+                display_y += 1;
+                continue;
+            }
+            crate::corsett::FoldEntry::Row(i) => i,
+        };
         let row_kind = app.rows[row_i].kind;
 
         // Section header before first component
@@ -369,7 +357,31 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         .zip(app.rows.get(app.cursor_row))
         .map(|(col, row)| format!("  [{}/{}]", col.name, row.name))
         .unwrap_or_default();
-    let fold_hint = if app.fold_active { "  [f] unfold" } else { "" };
+    let fold_hint = if app.fold_active {
+        // Check whether folding actually hides anything by re-computing the plan
+        let chain_row_indices: std::collections::HashSet<usize> = app
+            .chain_for_cursor()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|name| app.rows.iter().position(|r| &r.name == name))
+            .collect();
+        let has_hidden = if !chain_row_indices.is_empty() {
+            // We don't know available height here, so use a conservative large number
+            // to see if fold_to_height would hide anything without available height limit.
+            // A Hidden entry exists iff there are rows not in must_show. The presence of
+            // any row NOT in chain_row_indices while fold is active means something is hidden.
+            app.rows.len() > chain_row_indices.len()
+        } else {
+            false
+        };
+        if has_hidden {
+            "  [f] unfold"
+        } else {
+            "  [f] active"
+        }
+    } else {
+        ""
+    };
     let status_text = format!("{}{}{}", app.status, cursor_info, fold_hint);
     frame.render_widget(
         Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray)),

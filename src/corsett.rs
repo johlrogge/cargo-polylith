@@ -25,6 +25,58 @@
 //! ```
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Fold plan
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A single entry in a fold plan — either a real row (by original index)
+/// or a placeholder for a run of hidden rows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FoldEntry {
+    Row(usize),    // index into the original rows slice
+    Hidden(usize), // count of consecutive rows hidden at this position
+}
+
+/// Compute a minimal fold plan given total row count, a set of "must show" indices,
+/// and the available display height.
+///
+/// - If `total_rows <= available`: returns every row as `FoldEntry::Row` (nothing to hide).
+/// - Otherwise: keeps all `must_show` rows visible and collapses consecutive runs of
+///   non-must-show rows into `FoldEntry::Hidden(count)` entries, using as few display
+///   rows as possible while showing all priority rows.
+///
+/// `scroll_offset` is the first row index to include (mirrors the grid scroll position).
+pub fn fold_to_height(
+    total_rows: usize,
+    must_show: &std::collections::HashSet<usize>,
+    available: usize,
+    scroll_offset: usize,
+) -> Vec<FoldEntry> {
+    let rows_from_scroll = total_rows.saturating_sub(scroll_offset);
+    if rows_from_scroll <= available {
+        // Everything fits — no hiding needed
+        return (scroll_offset..total_rows).map(FoldEntry::Row).collect();
+    }
+    // Hide non-chain rows in consecutive groups
+    let mut plan = Vec::new();
+    let mut hidden = 0usize;
+    for i in scroll_offset..total_rows {
+        if must_show.contains(&i) {
+            if hidden > 0 {
+                plan.push(FoldEntry::Hidden(hidden));
+                hidden = 0;
+            }
+            plan.push(FoldEntry::Row(i));
+        } else {
+            hidden += 1;
+        }
+    }
+    if hidden > 0 {
+        plan.push(FoldEntry::Hidden(hidden));
+    }
+    plan
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Core single-name helpers (useful standalone)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -346,6 +398,43 @@ mod tests {
         assert_eq!(h, 6, "expected min height 6, got {h}");
         assert!(shortened[0].starts_with("m…-"), "{}", shortened[0]);
         assert!(shortened[1].starts_with("m…-"), "{}", shortened[1]);
+    }
+
+    // ── fold_to_height ────────────────────────────────────────────────────────
+
+    #[test]
+    fn fold_to_height_no_hiding_when_fits() {
+        // 5 rows, 10 available → everything fits, return all as Row
+        let must_show: std::collections::HashSet<usize> = [1, 3].iter().copied().collect();
+        let plan = fold_to_height(5, &must_show, 10, 0);
+        assert_eq!(
+            plan,
+            vec![
+                FoldEntry::Row(0),
+                FoldEntry::Row(1),
+                FoldEntry::Row(2),
+                FoldEntry::Row(3),
+                FoldEntry::Row(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn fold_to_height_hides_non_chain() {
+        // 10 rows, only rows 2 and 5 must show, available = 5 (not enough for all 10)
+        let must_show: std::collections::HashSet<usize> = [2, 5].iter().copied().collect();
+        let plan = fold_to_height(10, &must_show, 5, 0);
+        // Expect: Hidden(2), Row(2), Hidden(2), Row(5), Hidden(4)
+        assert_eq!(
+            plan,
+            vec![
+                FoldEntry::Hidden(2),
+                FoldEntry::Row(2),
+                FoldEntry::Hidden(2),
+                FoldEntry::Row(5),
+                FoldEntry::Hidden(4),
+            ]
+        );
     }
 }
 
