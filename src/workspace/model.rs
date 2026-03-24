@@ -121,6 +121,19 @@ pub struct WorkspaceMap {
     pub polylith_toml: Option<PolylithToml>,
 }
 
+/// Plan produced by analysing the root workspace before migration.
+/// Computed by `workspace::plan_root_demotion`; consumed by `scaffold::execute_root_demotion`.
+#[derive(Debug, Clone)]
+pub struct RootDemotionPlan {
+    /// Extracted [workspace.package] metadata for Polylith.toml
+    pub workspace_package: Option<WorkspacePackageMeta>,
+    /// External (non-path) library deps for Polylith.toml [libraries].
+    /// Each entry has `raw` populated for verbatim TOML rendering.
+    pub libraries: HashMap<String, ExternalDepInfo>,
+    /// Profile names discovered in profiles/ → relative path
+    pub profiles: HashMap<String, String>,
+}
+
 /// The fully resolved data needed to generate a profile workspace Cargo.toml.
 /// Computed by `workspace::resolve_profile_workspace`; consumed by `scaffold::write_profile_workspace`.
 #[derive(Debug, Clone)]

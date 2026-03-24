@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::commands::validate::validate_brick_name;
 use crate::output::table;
-use crate::workspace::{build_workspace_map, discover_profiles, resolve_profile_workspace, resolve_root};
+use crate::workspace::{build_workspace_map, discover_profiles, plan_root_demotion, resolve_profile_workspace, resolve_root};
 
 pub fn list(json: bool, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -105,9 +105,10 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
     crate::scaffold::create_dev_profile_from_deps(&root, &impl_pairs)?;
     eprintln!("Created profiles/dev.profile");
 
-    // Demote root workspace: write Polylith.toml and remove [workspace] from Cargo.toml
-    // Must happen before profile workspace generation so [workspace.package] is available
-    crate::scaffold::demote_root_workspace(&root, force)?;
+    // Demote root workspace: read/analyse phase (workspace module), then write phase (scaffold module).
+    // Must happen before profile workspace generation so [workspace.package] is available.
+    let demotion_plan = plan_root_demotion(&root)?;
+    crate::scaffold::execute_root_demotion(&root, &demotion_plan)?;
     eprintln!("Created Polylith.toml");
     eprintln!("Removed [workspace] from root Cargo.toml");
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use cargo_toml::Manifest;
 
-use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
+use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, RootDemotionPlan, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
 
 /// Resolve the workspace root: use `override_root` if given, otherwise walk
 /// up from `start` searching for a `Polylith.toml` or `Cargo.toml` with `[workspace]`.
@@ -167,6 +167,112 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
 pub fn read_polylith_toml(root: &Path) -> Result<PolylithToml> {
     parse_polylith_toml(root)?
         .ok_or_else(|| anyhow::anyhow!("Polylith.toml not found at {}", root.display()))
+}
+
+/// Analyse the root workspace and produce a `RootDemotionPlan` — pure read, no writes.
+///
+/// Reads root `Cargo.toml` to extract `[workspace.package]` metadata and non-path
+/// `[workspace.dependencies]`, then scans `profiles/*.profile` for profile names.
+/// Returns a plan that `scaffold::execute_root_demotion` can consume.
+pub fn plan_root_demotion(root: &Path) -> Result<RootDemotionPlan> {
+    use std::collections::HashMap;
+
+    let manifest_path = root.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let doc: toml_edit::DocumentMut = content.parse()
+        .with_context(|| "parsing root Cargo.toml")?;
+
+    // Extract [workspace.package] fields
+    let version = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let edition = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("edition"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let authors: Vec<String> = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("authors"))
+        .and_then(|v| v.as_value())
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    let license = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("license"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let repository = doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("repository"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let has_package_meta = version.is_some() || edition.is_some() || !authors.is_empty()
+        || license.is_some() || repository.is_some();
+
+    let workspace_package = if has_package_meta {
+        Some(WorkspacePackageMeta { version, edition, authors, license, repository })
+    } else {
+        None
+    };
+
+    // Extract non-path deps from [workspace.dependencies]
+    let mut libraries: HashMap<String, ExternalDepInfo> = HashMap::new();
+    if let Some(ws_deps) = doc
+        .get("workspace")
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        for (key, val) in ws_deps.iter() {
+            // Skip path deps — they are interface wiring, not libraries
+            let has_path = val
+                .as_value()
+                .and_then(|v| v.as_inline_table())
+                .and_then(|it| it.get("path"))
+                .is_some()
+                || val.as_table().and_then(|t| t.get("path")).is_some();
+            if has_path {
+                continue;
+            }
+            let version = parse_version_from_item(val);
+            let mut features = parse_features_from_item(val);
+            features.sort();
+            let raw = Some(render_dep_item_raw(val));
+            libraries.insert(key.to_string(), ExternalDepInfo { version, features, raw });
+        }
+    }
+
+    // Discover existing profile names from profiles/*.profile
+    let profiles_dir = root.join("profiles");
+    let mut profiles: HashMap<String, String> = HashMap::new();
+    if profiles_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&profiles_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("profile") {
+                    continue;
+                }
+                if let Some(name) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) {
+                    profiles.insert(
+                        name.clone(),
+                        format!("profiles/{}.profile", name),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(RootDemotionPlan { workspace_package, libraries, profiles })
 }
 
 /// Parse `Polylith.toml` from the given root directory, returning `None` if not present.

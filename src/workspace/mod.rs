@@ -4,8 +4,8 @@ pub mod model;
 pub mod status;
 
 pub use check::{check_profile, run_checks, Violation, ViolationKind};
-pub use discover::{build_workspace_map, discover_profiles, read_polylith_toml, resolve_profile_workspace, resolve_root};
-pub use model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, ResolvedProfileWorkspace, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
+pub use discover::{build_workspace_map, discover_profiles, plan_root_demotion, read_polylith_toml, resolve_profile_workspace, resolve_root};
+pub use model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, ResolvedProfileWorkspace, RootDemotionPlan, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
 pub use status::{run_status, Divergence, StatusReport};
 
 /// Classification of a dependency key found in a brick's `[dependencies]`.
