@@ -121,8 +121,6 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             chain.into_iter().enumerate().map(|(i, name)| (name, i + 1)).collect()
         })
         .unwrap_or_default();
-    let chain_len = chain_positions.len();
-
     // ── Data rows ──────────────────────────────────────────────────────────
     let mut display_y = inner.y + header_rows;
     let bottom = inner.y + inner.height;
