@@ -647,21 +647,6 @@ fn toml_bool(item: &toml_edit::Item, key: &str) -> Option<bool> {
         })
 }
 
-/// Extract a string value from a TOML item by key, handling both inline tables
-/// (`foo = { key = "val" }`) and regular tables (`[dep]\nkey = "val"`).
-fn toml_str(item: &toml_edit::Item, key: &str) -> Option<String> {
-    item.as_value()
-        .and_then(|v| v.as_inline_table())
-        .and_then(|t| t.get(key))
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            item.as_table()
-                .and_then(|t| t.get(key))
-                .and_then(|i| i.as_value())
-                .and_then(|v| v.as_str())
-        })
-        .map(|s| s.to_string())
-}
 
 /// Return `true` if the given `toml_edit::Item` is `{ workspace = true }` — either
 /// as a dotted key table (`version.workspace = true`) or an inline table.
