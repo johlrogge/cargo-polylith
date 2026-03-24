@@ -402,9 +402,7 @@ pub fn demote_root_workspace(root: &Path, force: bool) -> Result<()> {
         for key in &sorted_keys {
             if let Some(val) = ws_deps.get(key.as_str()) {
                 // Skip path deps
-                let has_path = val.as_value().and_then(|v| v.as_inline_table()).and_then(|it| it.get("path")).is_some()
-                    || val.as_table().and_then(|t| t.get("path")).is_some();
-                if has_path {
+                if toml_str(val, "path").is_some() {
                     continue;
                 }
                 // Render the dep value as a TOML inline expression
@@ -665,7 +663,7 @@ fn strip_workspace_from_manifest(
                             .or_else(|| {
                                 it.as_table()
                                     .and_then(|t| t.get(key))
-                                    .and_then(|v| v.as_value())
+                                    .and_then(|i| i.as_value())
                             })
                     });
                     if let Some(v) = val {
@@ -690,22 +688,40 @@ fn strip_workspace_from_manifest(
     Ok(changed)
 }
 
+/// Extract a bool value from a TOML item by key (inline or regular table).
+fn toml_bool(item: &toml_edit::Item, key: &str) -> Option<bool> {
+    item.as_value()
+        .and_then(|v| v.as_inline_table())
+        .and_then(|t| t.get(key))
+        .and_then(|v| v.as_bool())
+        .or_else(|| {
+            item.as_table()
+                .and_then(|t| t.get(key))
+                .and_then(|i| i.as_value())
+                .and_then(|v| v.as_bool())
+        })
+}
+
+/// Extract a string value from a TOML item by key, handling both inline tables
+/// (`foo = { key = "val" }`) and regular tables (`[dep]\nkey = "val"`).
+fn toml_str(item: &toml_edit::Item, key: &str) -> Option<String> {
+    item.as_value()
+        .and_then(|v| v.as_inline_table())
+        .and_then(|t| t.get(key))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            item.as_table()
+                .and_then(|t| t.get(key))
+                .and_then(|i| i.as_value())
+                .and_then(|v| v.as_str())
+        })
+        .map(|s| s.to_string())
+}
+
 /// Return `true` if the given `toml_edit::Item` is `{ workspace = true }` — either
 /// as a dotted key table (`version.workspace = true`) or an inline table.
 fn is_workspace_true_item(item: Option<&toml_edit::Item>) -> bool {
-    let item = match item {
-        Some(i) => i,
-        None => return false,
-    };
-    // Inline table: `dep = { workspace = true }`
-    if let Some(it) = item.as_value().and_then(|v| v.as_inline_table()) {
-        return it.get("workspace").and_then(|v| v.as_bool()) == Some(true);
-    }
-    // Regular/dotted-key table: `dep.workspace = true` becomes a table with key "workspace"
-    if let Some(t) = item.as_table() {
-        return t.get("workspace").and_then(|v| v.as_value()).and_then(|v| v.as_bool()) == Some(true);
-    }
-    false
+    item.is_some_and(|i| toml_bool(i, "workspace") == Some(true))
 }
 
 /// Render a toml_edit `Item` value as a TOML inline string (for Polylith.toml [libraries]).

@@ -118,34 +118,9 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
                     .and_then(|d| d.as_table())
                 {
                     for (key, val) in ws_deps.iter() {
-                        let path = val
-                            .as_value()
-                            .and_then(|v| v.as_inline_table())
-                            .and_then(|it| it.get("path"))
-                            .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                val.as_table()
-                                    .and_then(|t| t.get("path"))
-                                    .and_then(|v| v.as_value())
-                                    .and_then(|v| v.as_str())
-                            });
-                        if let Some(path) = path {
-                            let package = val
-                                .as_value()
-                                .and_then(|v| v.as_inline_table())
-                                .and_then(|it| it.get("package"))
-                                .and_then(|v| v.as_str())
-                                .or_else(|| {
-                                    val.as_table()
-                                        .and_then(|t| t.get("package"))
-                                        .and_then(|v| v.as_value())
-                                        .and_then(|v| v.as_str())
-                                })
-                                .map(|s| s.to_string());
-                            map.insert(key.to_string(), WorkspacePathDep {
-                                path: path.to_string(),
-                                package,
-                            });
+                        if let Some(path) = toml_str(val, "path") {
+                            let package = toml_str(val, "package");
+                            map.insert(key.to_string(), WorkspacePathDep { path, package });
                         }
                     }
                 }
@@ -239,9 +214,7 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
     if let Some(libs) = doc.get("libraries").and_then(|t| t.as_table()) {
         for (k, v) in libs.iter() {
             // Skip path deps
-            let has_path = v.as_value().and_then(|v| v.as_inline_table()).and_then(|it| it.get("path")).is_some()
-                || v.as_table().and_then(|t| t.get("path")).is_some();
-            if has_path {
+            if toml_str(v, "path").is_some() {
                 continue;
             }
             let version = parse_version_from_item(v);
@@ -327,25 +300,8 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
             let mut keys = vec![];
             if let Some(deps_table) = doc.get("dependencies").and_then(|d| d.as_table()) {
                 for (k, v) in deps_table.iter() {
-                    let has_path = v
-                        .as_value()
-                        .and_then(|v| v.as_inline_table())
-                        .and_then(|it| it.get("path"))
-                        .is_some()
-                        || v.as_table()
-                            .and_then(|t| t.get("path"))
-                            .is_some();
-                    let is_workspace = v
-                        .as_value()
-                        .and_then(|v| v.as_inline_table())
-                        .and_then(|it| it.get("workspace"))
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false)
-                        || v.as_table()
-                            .and_then(|t| t.get("workspace"))
-                            .and_then(|v| v.as_value())
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
+                    let has_path = toml_str(v, "path").is_some();
+                    let is_workspace = toml_bool(v, "workspace").unwrap_or(false);
                     if has_path && !is_workspace {
                         keys.push(k.to_string());
                     }
@@ -367,28 +323,43 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
     Ok(bricks)
 }
 
+/// Extract a string value from a TOML item by key, handling both inline tables
+/// (`foo = { key = "val" }`) and regular tables (`[dep]\nkey = "val"`).
+fn toml_str(item: &toml_edit::Item, key: &str) -> Option<String> {
+    item.as_value()
+        .and_then(|v| v.as_inline_table())
+        .and_then(|t| t.get(key))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            item.as_table()
+                .and_then(|t| t.get(key))
+                .and_then(|i| i.as_value())
+                .and_then(|v| v.as_str())
+        })
+        .map(|s| s.to_string())
+}
+
+/// Extract a bool value from a TOML item by key (inline or regular table).
+fn toml_bool(item: &toml_edit::Item, key: &str) -> Option<bool> {
+    item.as_value()
+        .and_then(|v| v.as_inline_table())
+        .and_then(|t| t.get(key))
+        .and_then(|v| v.as_bool())
+        .or_else(|| {
+            item.as_table()
+                .and_then(|t| t.get(key))
+                .and_then(|i| i.as_value())
+                .and_then(|v| v.as_bool())
+        })
+}
+
 fn parse_version_from_item(v: &toml_edit::Item) -> Option<String> {
     // bare string: `serde = "1.0"`
     if let Some(s) = v.as_value().and_then(|v| v.as_str()) {
         if s != "*" { return Some(s.to_string()); }
         return None;
     }
-    // inline table
-    let from_inline = v
-        .as_value()
-        .and_then(|v| v.as_inline_table())
-        .and_then(|it| it.get("version"))
-        .and_then(|v| v.as_str())
-        .filter(|s| *s != "*")
-        .map(|s| s.to_string());
-    if from_inline.is_some() { return from_inline; }
-    // regular table
-    v.as_table()
-        .and_then(|t| t.get("version"))
-        .and_then(|v| v.as_value())
-        .and_then(|v| v.as_str())
-        .filter(|s| *s != "*")
-        .map(|s| s.to_string())
+    toml_str(v, "version").filter(|s| s != "*")
 }
 
 /// Render a toml_edit Item as a raw TOML value string suitable for use as a dep spec.
@@ -471,43 +442,15 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
         // the key is just a local alias. This applies to both [dependencies] and
         // [workspace.dependencies].
         let resolve_pkg_name = |k: &str, v: &toml_edit::Item| -> String {
-            let pkg = v
-                .as_value()
-                .and_then(|v| v.as_inline_table())
-                .and_then(|it| it.get("package"))
-                .and_then(|v| v.as_str())
-                .or_else(|| {
-                    v.as_table()
-                        .and_then(|t| t.get("package"))
-                        .and_then(|v| v.as_value())
-                        .and_then(|v| v.as_str())
-                });
-            pkg.unwrap_or(k).to_string()
+            toml_str(v, "package").unwrap_or_else(|| k.to_string())
         };
         // Helper: extract the `path = "..."` value from a dep item (inline table or regular table).
         let extract_path = |v: &toml_edit::Item| -> Option<String> {
-            v.as_value()
-                .and_then(|v| v.as_inline_table())
-                .and_then(|it| it.get("path"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    v.as_table()
-                        .and_then(|t| t.get("path"))
-                        .and_then(|v| v.as_value())
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                })
+            toml_str(v, "path")
         };
         // Helper: check whether a dep item has an explicit `package = "..."` alias.
         let has_package_alias = |v: &toml_edit::Item| -> bool {
-            v.as_value()
-                .and_then(|v| v.as_inline_table())
-                .and_then(|it| it.get("package"))
-                .is_some()
-                || v.as_table()
-                    .and_then(|t| t.get("package"))
-                    .is_some()
+            toml_str(v, "package").is_some()
         };
         let mut dep_set: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut dep_paths: Vec<(String, PathBuf)> = vec![];
@@ -516,16 +459,7 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
 
         // Helper: check whether a dep item has `workspace = true`.
         let is_workspace_dep = |v: &toml_edit::Item| -> bool {
-            v.as_value()
-                .and_then(|v| v.as_inline_table())
-                .and_then(|it| it.get("workspace"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-                || v.as_table()
-                    .and_then(|t| t.get("workspace"))
-                    .and_then(|v| v.as_value())
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
+            toml_bool(v, "workspace").unwrap_or(false)
         };
 
         let extract_version = |v: &toml_edit::Item| parse_version_from_item(v);
