@@ -113,36 +113,65 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Build chain position map: component name → 1-based step number
-    // Step 1 = direct-dep end (brightest), step N = hovered target (darkest)
-    let chain_positions: std::collections::HashMap<String, usize> = app
-        .chain_for_cursor()
-        .map(|chain| {
-            chain.into_iter().enumerate().map(|(i, name)| (name, i + 1)).collect()
-        })
-        .unwrap_or_default();
+    // Build combined chain map: name → (is_upstream: bool, step: usize)
+    // Upstream: step 1 = direct dep, step 2 = first transitive hop, etc.
+    // Downstream: step 1 = first BFS level from cursor, etc.
+    let chain_upstream: Vec<String> = app.chain_for_cursor().unwrap_or_default();
+    let chain_down_levels: Vec<Vec<String>> = app.downstream_levels_for_cursor();
+
+    let mut chain_map: std::collections::HashMap<String, (bool, usize)> = std::collections::HashMap::new();
+    for (i, name) in chain_upstream.iter().enumerate() {
+        chain_map.insert(name.clone(), (true, i + 1));
+    }
+    for (level_idx, level) in chain_down_levels.iter().enumerate() {
+        for name in level {
+            chain_map.entry(name.clone()).or_insert((false, level_idx + 1));
+        }
+    }
+
     // ── Data rows ──────────────────────────────────────────────────────────
     let mut display_y = inner.y + header_rows;
     let bottom = inner.y + inner.height;
 
-    // Compute fold plan using corsett
-    let chain_row_indices: std::collections::HashSet<usize> = if app.fold_active {
-        app.chain_for_cursor()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|name| app.rows.iter().position(|r| &r.name == name))
-            .collect()
-    } else {
-        std::collections::HashSet::new()
-    };
+    // Build fold plan: binary — chain rows shown, everything else hidden
+    let cursor_row_name = app.rows.get(app.cursor_row).map(|r| r.name.as_str()).unwrap_or("");
 
-    let fold_plan = if app.fold_active && !chain_row_indices.is_empty() {
-        crate::corsett::fold_to_height(
-            app.rows.len(),
-            &chain_row_indices,
-            (bottom - display_y) as usize, // available display rows
-            scroll_row,
-        )
+    let fold_plan: Vec<crate::corsett::FoldEntry> = if app.fold_active && !chain_map.is_empty() {
+        // Sort chain rows in dependency order:
+        // 1. Upstream rows (step order: direct dep first)
+        // 2. Cursor row
+        // 3. Downstream rows (level order)
+        let mut upstream_by_step: Vec<(usize, usize)> = Vec::new(); // (step, row_idx)
+        let mut downstream_by_level: Vec<(usize, usize)> = Vec::new(); // (level, row_idx)
+        for (row_i, row) in app.rows.iter().enumerate() {
+            if row.name == cursor_row_name { continue; }
+            if let Some(&(is_upstream, step)) = chain_map.get(&row.name) {
+                if is_upstream {
+                    upstream_by_step.push((step, row_i));
+                } else {
+                    downstream_by_level.push((step, row_i));
+                }
+            }
+        }
+        upstream_by_step.sort_by_key(|&(step, _)| step);
+        downstream_by_level.sort_by_key(|&(level, _)| level);
+
+        let mut ordered_chain: Vec<usize> = Vec::new();
+        for (_, row_i) in upstream_by_step { ordered_chain.push(row_i); }
+        ordered_chain.push(app.cursor_row);
+        for (_, row_i) in downstream_by_level { ordered_chain.push(row_i); }
+
+        let chain_set: std::collections::HashSet<usize> = ordered_chain.iter().copied().collect();
+        let non_chain_count = app.rows.len().saturating_sub(chain_set.len());
+
+        let mut plan: Vec<crate::corsett::FoldEntry> = Vec::new();
+        if non_chain_count > 0 {
+            plan.push(crate::corsett::FoldEntry::Hidden(non_chain_count));
+        }
+        for row_i in ordered_chain {
+            plan.push(crate::corsett::FoldEntry::Row(row_i));
+        }
+        plan
     } else {
         (scroll_row..app.rows.len())
             .map(crate::corsett::FoldEntry::Row)
@@ -248,15 +277,15 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             let is_cursor = is_cursor_row && col_i == app.cursor_col;
 
             // Chain highlighting: only in the cursor column, not on the cursor cell itself
-            let chain_pos = if col_i == app.cursor_col && !is_cursor {
+            let chain_mark: Option<(bool, usize)> = if col_i == app.cursor_col && !is_cursor {
                 let row_name = app.rows.get(row_i).map(|r| r.name.as_str()).unwrap_or("");
-                chain_positions.get(row_name).copied()
+                chain_map.get(row_name).copied()
             } else {
                 None
             };
 
-            let (ch, style) = if let Some(pos) = chain_pos {
-                if pos == 1 {
+            let (ch, style) = if let Some((is_upstream, step)) = chain_mark {
+                if is_upstream && step == 1 {
                     // Direct-dep entry point: light green bullet
                     (
                         "\u{25cf}".to_string(), // ●
@@ -264,9 +293,9 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
                             .fg(Color::Rgb(150, 255, 150))
                             .add_modifier(Modifier::BOLD),
                     )
-                } else {
-                    // Transitive hops: blue numbered starting at 1 (display = pos - 1)
-                    let display_step = pos - 1;
+                } else if is_upstream {
+                    // Upstream transitive hops: blue numbered (display = step - 1)
+                    let display_step = step - 1;
                     let digit = if display_step <= 9 {
                         char::from_digit(display_step as u32, 10).unwrap_or('+')
                     } else {
@@ -278,6 +307,20 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
                     (
                         digit.to_string(),
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    // Downstream: same step number shared across parallel deps, warmer blue-cyan
+                    let digit = if step <= 9 {
+                        char::from_digit(step as u32, 10).unwrap_or('+')
+                    } else {
+                        '+'
+                    };
+                    let intensity = 220u8.saturating_sub((step.saturating_sub(1) * 30) as u8);
+                    (
+                        digit.to_string(),
+                        Style::default()
+                            .fg(Color::Rgb(80, intensity, 200))
+                            .add_modifier(Modifier::BOLD),
                     )
                 }
             } else if is_cursor {
@@ -356,27 +399,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(col, row)| format!("  [{}/{}]", col.name, row.name))
         .unwrap_or_default();
     let fold_hint = if app.fold_active {
-        // Check whether folding actually hides anything by re-computing the plan
-        let chain_row_indices: std::collections::HashSet<usize> = app
-            .chain_for_cursor()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|name| app.rows.iter().position(|r| &r.name == name))
-            .collect();
-        let has_hidden = if !chain_row_indices.is_empty() {
-            // We don't know available height here, so use a conservative large number
-            // to see if fold_to_height would hide anything without available height limit.
-            // A Hidden entry exists iff there are rows not in must_show. The presence of
-            // any row NOT in chain_row_indices while fold is active means something is hidden.
-            app.rows.len() > chain_row_indices.len()
-        } else {
-            false
-        };
-        if has_hidden {
-            "  [f] unfold"
-        } else {
-            "  [f] active"
-        }
+        "  [f] unfold"
     } else {
         ""
     };

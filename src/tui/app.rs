@@ -205,12 +205,15 @@ impl App {
 
     pub fn move_up(&mut self) {
         if self.fold_active {
-            // Gather chain names for skip logic
-            let chain_names: std::collections::HashSet<String> = self
+            // Gather chain names (upstream + downstream) for skip logic
+            let mut chain_names: HashSet<String> = self
                 .chain_for_cursor()
                 .unwrap_or_default()
                 .into_iter()
                 .collect();
+            for level in self.downstream_levels_for_cursor() {
+                chain_names.extend(level);
+            }
             let mut r = self.cursor_row;
             loop {
                 if r == 0 {
@@ -232,11 +235,14 @@ impl App {
 
     pub fn move_down(&mut self) {
         if self.fold_active {
-            let chain_names: std::collections::HashSet<String> = self
+            let mut chain_names: HashSet<String> = self
                 .chain_for_cursor()
                 .unwrap_or_default()
                 .into_iter()
                 .collect();
+            for level in self.downstream_levels_for_cursor() {
+                chain_names.extend(level);
+            }
             let mut r = self.cursor_row;
             loop {
                 if r + 1 >= self.rows.len() {
@@ -422,6 +428,57 @@ impl App {
         find_chain(target, direct, &self.comp_deps, &self.base_names)
     }
 
+    /// Returns downstream BFS levels from the hovered cell.
+    /// Each inner Vec contains the names of components at that BFS distance from the cursor.
+    /// Only includes components that actually appear as rows in the grid.
+    /// Returns empty Vec if cursor is not on a Transitive cell.
+    pub fn downstream_levels_for_cursor(&self) -> Vec<Vec<String>> {
+        let r = self.cursor_row;
+        let c = self.cursor_col;
+        if self.cells.get(r)
+            .and_then(|row| row.get(c))
+            .copied() != Some(DepState::Transitive) {
+            return vec![];
+        }
+        let hovered_name = match self.rows.get(r) {
+            Some(row) => row.name.clone(),
+            None => return vec![],
+        };
+        // BFS from hovered component outward through comp_deps
+        let row_names: HashSet<&str> = self.rows.iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        let mut levels: Vec<Vec<String>> = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        visited.insert(hovered_name.clone());
+        let mut frontier: Vec<String> = self.comp_deps
+            .get(&hovered_name)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|n| row_names.contains(n.as_str()) && !visited.contains(n))
+            .collect();
+        frontier.sort(); // deterministic ordering
+        while !frontier.is_empty() {
+            for n in &frontier { visited.insert(n.clone()); }
+            let visible: Vec<String> = frontier.iter()
+                .filter(|n| row_names.contains(n.as_str()))
+                .cloned()
+                .collect();
+            if !visible.is_empty() {
+                levels.push(visible);
+            }
+            let mut next: Vec<String> = frontier.iter()
+                .flat_map(|n| self.comp_deps.get(n).cloned().unwrap_or_default())
+                .filter(|n| !visited.contains(n) && row_names.contains(n.as_str()))
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            next.sort();
+            frontier = next;
+        }
+        levels
+    }
 
     pub fn write_all(&mut self) -> Result<()> {
         let mut written = 0usize;
