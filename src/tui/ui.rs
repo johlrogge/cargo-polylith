@@ -129,6 +129,17 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
+    // Interfaces with 2+ implementations → radio-button rendering
+    let multi_impl_interfaces: std::collections::HashSet<&str> = {
+        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for row in &app.rows {
+            if let Some(iface) = row.interface.as_deref() {
+                *counts.entry(iface).or_insert(0) += 1;
+            }
+        }
+        counts.into_iter().filter(|&(_, n)| n >= 2).map(|(k, _)| k).collect()
+    };
+
     // ── Data rows ──────────────────────────────────────────────────────────
     let mut display_y = inner.y + header_rows;
     let bottom = inner.y + inner.height;
@@ -333,21 +344,37 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD),
                 )
             } else {
-                (
-                    match dep_state {
-                        DepState::Direct => "x".to_string(),
-                        DepState::Transitive => "·".to_string(),
-                        DepState::None => "-".to_string(),
-                    },
-                    match dep_state {
-                        DepState::Direct => {
-                            let base = Style::default().fg(Color::Green);
-                            if modified { base.add_modifier(Modifier::BOLD) } else { base }
-                        }
-                        DepState::Transitive => Style::default().fg(Color::Gray),
-                        DepState::None => Style::default().fg(Color::DarkGray),
-                    },
-                )
+                // Radio-button rendering for multi-implementation interface groups
+                let is_radio = app.rows.get(row_i)
+                    .and_then(|r| r.interface.as_deref())
+                    .map(|iface| multi_impl_interfaces.contains(iface))
+                    .unwrap_or(false);
+
+                match (dep_state, is_radio) {
+                    (DepState::Direct, true) => (
+                        "\u{25c9}".to_string(), // ◉
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    ),
+                    (DepState::None, true) => (
+                        "\u{25cb}".to_string(), // ○
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    _ => (
+                        match dep_state {
+                            DepState::Direct => "x".to_string(),
+                            DepState::Transitive => "·".to_string(),
+                            DepState::None => "-".to_string(),
+                        },
+                        match dep_state {
+                            DepState::Direct => {
+                                let base = Style::default().fg(Color::Green);
+                                if modified { base.add_modifier(Modifier::BOLD) } else { base }
+                            }
+                            DepState::Transitive => Style::default().fg(Color::Gray),
+                            DepState::None => Style::default().fg(Color::DarkGray),
+                        },
+                    ),
+                }
             };
 
             let x = inner.x + LABEL_WIDTH + sc as u16 * COL_WIDTH;
