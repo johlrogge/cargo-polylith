@@ -339,6 +339,20 @@ impl App {
         self.status = "Interface staged — press w to write.  ←→↑↓/hjkl: navigate  Space: toggle  i: interface  w: write  n: new project  q: quit".into();
     }
 
+    /// Returns the raw dependency chain if the cursor is on a Transitive cell.
+    /// Chain is ordered from the direct-dep end to the target (hovered cell).
+    /// E.g. ["cli", "mcp", "scaffold"] means: project → cli → mcp → scaffold.
+    pub fn chain_for_cursor(&self) -> Option<Vec<String>> {
+        let r = self.cursor_row;
+        let c = self.cursor_col;
+        if self.cells.get(r)?.get(c).copied()? != DepState::Transitive {
+            return None;
+        }
+        let target = &self.rows.get(r)?.name;
+        let direct = self.project_direct_deps.get(c)?;
+        find_chain(target, direct, &self.comp_deps, &self.base_names)
+    }
+
     /// If the cursor is on a `Transitive` cell, returns a human-readable string
     /// describing the dependency chain, e.g.:
     /// `"scaffold via: myproject → cli (base) → mcp → scaffold"`

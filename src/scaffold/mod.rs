@@ -123,56 +123,6 @@ pub fn create_project(root: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Declare a component implementation for an interface in a project's `[dependencies]`.
-///
-/// Writes:
-/// ```toml
-/// <interface> = { path = "<rel>" }                          # when pkg name == interface
-/// <interface> = { path = "<rel>", package = "<pkg-name>" }  # when pkg name differs
-/// ```
-///
-/// The `package` key is only included when the component's actual package name differs
-/// from the interface alias — matching the pattern used in real-world polylith workspaces.
-pub fn set_project_implementation(
-    project_path: &Path,
-    interface: &str,
-    component_path: &Path,
-) -> Result<()> {
-    let manifest_path = project_path.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let mut doc: DocumentMut = content.parse().context("parsing project Cargo.toml")?;
-
-    // Read the component's actual package name.
-    let comp_manifest = component_path.join("Cargo.toml");
-    let comp_content = fs::read_to_string(&comp_manifest)
-        .with_context(|| format!("reading {}", comp_manifest.display()))?;
-    let comp_doc: DocumentMut = comp_content.parse().context("parsing component Cargo.toml")?;
-    let pkg_name = comp_doc["package"]["name"]
-        .as_str()
-        .unwrap_or(interface)
-        .to_string();
-
-    let rel = relative_path(project_path, component_path);
-    let rel_str = rel.to_string_lossy();
-
-    // Ensure [dependencies] table exists.
-    if doc.get("dependencies").is_none() {
-        doc["dependencies"] = toml_edit::table();
-    }
-
-    let mut tbl = toml_edit::InlineTable::new();
-    tbl.insert("path", toml_edit::Value::from(rel_str.as_ref()));
-    if pkg_name != interface {
-        tbl.insert("package", toml_edit::Value::from(pkg_name.as_str()));
-    }
-    doc["dependencies"][interface] =
-        toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl));
-
-    fs::write(&manifest_path, doc.to_string())
-        .with_context(|| format!("writing {}", manifest_path.display()))?;
-    Ok(())
-}
 
 /// Compute a relative path from `from_dir` to `to_dir` (both absolute).
 /// Walks up with `..` components until a common ancestor is found, then appends
