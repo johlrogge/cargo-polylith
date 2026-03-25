@@ -310,6 +310,28 @@ pub fn add_profile_impl(
     Ok(())
 }
 
+/// Write or update an implementation entry directly to a profile file path.
+///
+/// Unlike `add_profile_impl`, this takes the absolute path to the `.profile`
+/// file rather than deriving it from `root` + `profile_name`. Creates the file
+/// with an empty `[implementations]` table if it doesn't exist.
+pub fn write_profile_impl(profile_path: &Path, interface: &str, impl_path: &str) -> Result<()> {
+    let content = if profile_path.exists() {
+        fs::read_to_string(profile_path)
+            .with_context(|| format!("reading {}", profile_path.display()))?
+    } else {
+        "[implementations]\n".to_string()
+    };
+    let mut doc: DocumentMut = content.parse().context("parsing profile file")?;
+    if doc.get("implementations").is_none() {
+        doc["implementations"] = toml_edit::table();
+    }
+    doc["implementations"][interface] = toml_edit::value(impl_path);
+    fs::write(profile_path, doc.to_string())
+        .with_context(|| format!("writing {}", profile_path.display()))?;
+    Ok(())
+}
+
 /// Create `profiles/dev.profile` with an `[implementations]` section populated
 /// from the given `(interface_key, path_string)` pairs.
 /// Creates the `profiles/` directory if it doesn't exist.
@@ -625,21 +647,6 @@ fn toml_bool(item: &toml_edit::Item, key: &str) -> Option<bool> {
         })
 }
 
-/// Extract a string value from a TOML item by key, handling both inline tables
-/// (`foo = { key = "val" }`) and regular tables (`[dep]\nkey = "val"`).
-fn toml_str(item: &toml_edit::Item, key: &str) -> Option<String> {
-    item.as_value()
-        .and_then(|v| v.as_inline_table())
-        .and_then(|t| t.get(key))
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            item.as_table()
-                .and_then(|t| t.get(key))
-                .and_then(|i| i.as_value())
-                .and_then(|v| v.as_str())
-        })
-        .map(|s| s.to_string())
-}
 
 /// Return `true` if the given `toml_edit::Item` is `{ workspace = true }` — either
 /// as a dotted key table (`version.workspace = true`) or an inline table.
