@@ -891,21 +891,24 @@ serde = { workspace = true }
         "logger should still have serde dep.\ncontent:\n{logger_content}"
     );
 
-    // Check parser component was rewritten — inter-brick dep (logger) becomes explicit path dep
+    // Check parser component — inter-brick dep (logger) stays as { workspace = true }
+    // so that profiles can swap implementations. Only library deps (serde) are resolved.
     let parser_manifest = tmp.path().join("components/parser/Cargo.toml");
     let parser_content = fs::read_to_string(&parser_manifest).unwrap();
+    // serde (library dep) should have been resolved, no more workspace = true for it
     assert!(
-        !parser_content.contains("workspace = true"),
-        "parser should have no workspace = true after migration.\ncontent:\n{parser_content}"
+        parser_content.contains("serde"),
+        "parser should still have serde dep.\ncontent:\n{parser_content}"
     );
+    // logger (inter-brick dep) should remain as { workspace = true }
     assert!(
-        parser_content.contains("path"),
-        "parser's logger dep should be an explicit path dep.\ncontent:\n{parser_content}"
+        parser_content.contains("logger"),
+        "parser should still have logger dep.\ncontent:\n{parser_content}"
     );
-    // The path from components/parser to components/logger should be ../logger
+    // The inter-brick dep must NOT have been converted to a path dep
     assert!(
-        parser_content.contains("../logger"),
-        "parser's logger dep should use relative path '../logger'.\ncontent:\n{parser_content}"
+        !parser_content.contains("../logger"),
+        "parser's logger dep should NOT be converted to a path dep — it stays as workspace = true.\ncontent:\n{parser_content}"
     );
 }
 

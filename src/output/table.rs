@@ -157,6 +157,7 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::ProfileImplPathNotFound { .. } => "profile-impl-not-found".red().to_string(),
             ViolationKind::ProfileImplNotAComponent { .. } => "profile-impl-not-component".red().to_string(),
             ViolationKind::HardwiredDep { .. } => "hardwired-dep".yellow().to_string(),
+            ViolationKind::HardwiredImplDep { .. } => "hardwired-impl".red().to_string(),
         };
         println!("  [{tag}] {}", v.message);
     }

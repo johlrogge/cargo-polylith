@@ -415,6 +415,24 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
             }
             keys
         };
+        // Extract deps where package = "X" and X differs from the dep key
+        let hardwired_pkg_deps: Vec<(String, String)> = {
+            let mut hpd = vec![];
+            for table_name in &["dependencies", "dev-dependencies", "build-dependencies"] {
+                if let Some(deps) = doc.get(table_name).and_then(|d| d.as_table()) {
+                    for (key, val) in deps.iter() {
+                        if let Some(pkg) = toml_str(val, "package") {
+                            let normalized_key = key.replace('-', "_");
+                            let normalized_pkg = pkg.replace('-', "_");
+                            if normalized_key != normalized_pkg {
+                                hpd.push((key.to_string(), pkg));
+                            }
+                        }
+                    }
+                }
+            }
+            hpd
+        };
         bricks.push(Brick {
             name,
             kind: kind.clone(),
@@ -423,6 +441,7 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
             manifest_path,
             interface,
             path_dep_keys,
+            hardwired_pkg_deps,
         });
     }
     bricks.sort_by(|a, b| a.name.cmp(&b.name));
@@ -598,6 +617,24 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             .and_then(|v| v.as_value())
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // Extract deps where package = "X" and X differs from the dep key
+        let hardwired_pkg_deps: Vec<(String, String)> = {
+            let mut hpd = vec![];
+            for table_name in &["dependencies", "dev-dependencies", "build-dependencies"] {
+                if let Some(deps) = doc.get(table_name).and_then(|d| d.as_table()) {
+                    for (key, val) in deps.iter() {
+                        if let Some(pkg) = toml_str(val, "package") {
+                            let normalized_key = key.replace('-', "_");
+                            let normalized_pkg = pkg.replace('-', "_");
+                            if normalized_key != normalized_pkg {
+                                hpd.push((key.to_string(), pkg));
+                            }
+                        }
+                    }
+                }
+            }
+            hpd
+        };
         projects.push(Project {
             name,
             path: path.clone(),
@@ -606,6 +643,7 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
             bin_name,
             dep_paths,
             external_deps,
+            hardwired_pkg_deps,
         });
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1032,6 +1070,7 @@ mod tests {
             manifest_path: root.join("components/store_mem/Cargo.toml"),
             interface: Some("store".to_string()),
             path_dep_keys: vec![],
+            hardwired_pkg_deps: vec![],
         };
         let store_file = Brick {
             name: "store_file".to_string(),
@@ -1041,6 +1080,7 @@ mod tests {
             manifest_path: root.join("components/store_file/Cargo.toml"),
             interface: Some("store".to_string()),
             path_dep_keys: vec![],
+            hardwired_pkg_deps: vec![],
         };
         // One base that depends on "store" (the interface key)
         let app_base = Brick {
@@ -1051,6 +1091,7 @@ mod tests {
             manifest_path: root.join("bases/app/Cargo.toml"),
             interface: None,
             path_dep_keys: vec![],
+            hardwired_pkg_deps: vec![],
         };
         // One project
         let myproject = Project {
@@ -1061,6 +1102,7 @@ mod tests {
             bin_name: None,
             dep_paths: vec![],
             external_deps: HashMap::new(),
+            hardwired_pkg_deps: vec![],
         };
 
         // Root workspace interface dep points at store_mem (the default)
