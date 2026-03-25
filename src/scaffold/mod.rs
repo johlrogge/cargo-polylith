@@ -123,29 +123,6 @@ pub fn create_project(root: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-
-/// Compute a relative path from `from_dir` to `to_dir` (both absolute).
-/// Walks up with `..` components until a common ancestor is found, then appends
-/// the remaining suffix of `to_dir`.
-fn relative_path(from_dir: &Path, to_dir: &Path) -> std::path::PathBuf {
-    use std::path::PathBuf;
-
-    let from: Vec<_> = from_dir.components().collect();
-    let to: Vec<_> = to_dir.components().collect();
-
-    let common = from.iter().zip(to.iter()).take_while(|(a, b)| a == b).count();
-
-    let up = from.len() - common;
-    let mut rel = PathBuf::new();
-    for _ in 0..up {
-        rel.push("..");
-    }
-    for part in &to[common..] {
-        rel.push(part);
-    }
-    rel
-}
-
 /// Write a profile workspace Cargo.toml from pre-resolved profile data.
 ///
 /// Creates `profiles/<name>/Cargo.toml` at the workspace root, plus symlinks
@@ -451,21 +428,16 @@ pub fn execute_root_demotion(root: &Path, plan: &RootDemotionPlan) -> Result<()>
 }
 
 /// Strip `{ workspace = true }` references from all brick `Cargo.toml` files
-/// under `components/` and `bases/`, replacing them with explicit values from
-/// `polylith_toml`. Inter-brick deps (path deps to other components/bases) are
-/// converted to explicit path deps using `interface_impls`.
+/// under `components/`, `bases/`, and `projects/`, replacing them with explicit
+/// values from `polylith_toml`. Only external library deps (those listed in
+/// `polylith_toml.libraries`) are rewritten; inter-brick workspace deps are left
+/// unchanged so that profiles can swap implementations.
 /// Returns the number of bricks rewritten.
 pub fn strip_workspace_inheritance(
     root: &Path,
     polylith_toml: &crate::workspace::PolylithToml,
-    interface_impls: &[(String, String)],
+    _interface_impls: &[(String, String)],
 ) -> Result<usize> {
-    // Build a HashMap for O(1) lookup: interface_key -> path_relative_to_root
-    let impl_map: std::collections::HashMap<&str, &str> = interface_impls
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-
     let mut count = 0;
     for kind_dir in &["components", "bases", "projects"] {
         let dir = root.join(kind_dir);
@@ -481,7 +453,7 @@ pub fn strip_workspace_inheritance(
             if !manifest_path.exists() {
                 continue;
             }
-            let changed = strip_workspace_from_manifest(&manifest_path, polylith_toml, &impl_map, root)?;
+            let changed = strip_workspace_from_manifest(&manifest_path, polylith_toml)?;
             if changed {
                 count += 1;
             }
@@ -491,13 +463,13 @@ pub fn strip_workspace_inheritance(
 }
 
 /// Rewrite a single brick `Cargo.toml`, replacing `{ workspace = true }` fields
-/// with explicit values from `polylith_toml`. Inter-brick workspace deps are
-/// converted to explicit path deps using `impl_map`. Returns `true` if the file was changed.
+/// with explicit values from `polylith_toml`. Only external library deps (those in
+/// `polylith_toml.libraries`) are rewritten; inter-brick workspace deps are left
+/// unchanged so that profiles can swap implementations.
+/// Returns `true` if the file was changed.
 fn strip_workspace_from_manifest(
     manifest_path: &Path,
     polylith_toml: &crate::workspace::PolylithToml,
-    impl_map: &std::collections::HashMap<&str, &str>,
-    root: &Path,
 ) -> Result<bool> {
     let content = fs::read_to_string(manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
@@ -590,32 +562,6 @@ fn strip_workspace_from_manifest(
                     toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl))
                 };
                 doc[table_name][&dep_name] = new_val;
-                changed = true;
-            } else if let Some(impl_path) = impl_map.get(dep_name.as_str()) {
-                // Inter-brick dep: convert to explicit path dep, preserving other attributes
-                let brick_dir = manifest_path.parent().unwrap();
-                let target_dir = root.join(impl_path);
-                let rel = relative_path(brick_dir, &target_dir);
-                let existing = doc[table_name].get(&dep_name).cloned();
-                let mut tbl = toml_edit::InlineTable::new();
-                tbl.insert("path", toml_edit::Value::from(rel.to_string_lossy().as_ref()));
-                // Preserve other attributes (optional, package, features, default-features)
-                for key in &["optional", "package", "features", "default-features"] {
-                    let val = existing.as_ref().and_then(|it| {
-                        it.as_value()
-                            .and_then(|v| v.as_inline_table())
-                            .and_then(|t| t.get(key))
-                            .or_else(|| {
-                                it.as_table()
-                                    .and_then(|t| t.get(key))
-                                    .and_then(|i| i.as_value())
-                            })
-                    });
-                    if let Some(v) = val {
-                        tbl.insert(*key, v.clone());
-                    }
-                }
-                doc[table_name][&dep_name] = toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl));
                 changed = true;
             } else {
                 eprintln!(

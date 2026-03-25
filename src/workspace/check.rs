@@ -87,6 +87,13 @@ pub enum ViolationKind {
         brick: String,
         dep: String,
     },
+    /// A dep uses `package = "X"` where X differs from the dep key — hardwires a
+    /// specific implementation rather than coding against the interface.
+    HardwiredImplDep {
+        brick: String,
+        dep: String,
+        package: String,
+    },
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -503,6 +510,40 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
         }
     }
 
+    // --- hardwired impl dep checks (package = "X" where X != dep key) ---
+    // Check bricks (components and bases)
+    for brick in map.components.iter().chain(map.bases.iter()) {
+        for (dep_key, pkg_name) in &brick.hardwired_pkg_deps {
+            violations.push(Violation {
+                kind: ViolationKind::HardwiredImplDep {
+                    brick: brick.name.clone(),
+                    dep: dep_key.clone(),
+                    package: pkg_name.clone(),
+                },
+                message: format!(
+                    "'{}': dep '{}' uses `package = \"{}\"` — this hardwires a specific implementation instead of coding against the interface",
+                    brick.name, dep_key, pkg_name
+                ),
+            });
+        }
+    }
+    // Check projects
+    for project in &map.projects {
+        for (dep_key, pkg_name) in &project.hardwired_pkg_deps {
+            violations.push(Violation {
+                kind: ViolationKind::HardwiredImplDep {
+                    brick: project.name.clone(),
+                    dep: dep_key.clone(),
+                    package: pkg_name.clone(),
+                },
+                message: format!(
+                    "project '{}': dep '{}' uses `package = \"{}\"` — this hardwires a specific implementation instead of coding against the interface",
+                    project.name, dep_key, pkg_name
+                ),
+            });
+        }
+    }
+
     violations
 }
 
@@ -528,6 +569,7 @@ pub fn is_warning_kind(k: &ViolationKind) -> bool {
         ViolationKind::ProfileImplPathNotFound { .. } => false,
         ViolationKind::ProfileImplNotAComponent { .. } => false,
         ViolationKind::HardwiredDep { .. } => true,
+        ViolationKind::HardwiredImplDep { .. } => false,
     }
 }
 

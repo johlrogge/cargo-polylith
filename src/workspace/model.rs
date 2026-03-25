@@ -42,6 +42,9 @@ pub struct Brick {
     /// Dep keys that use a direct `path = "..."` dep (not `{ workspace = true }`).
     /// Used to detect bricks that bypass the workspace wiring diagram.
     pub path_dep_keys: Vec<String>,
+    /// Deps where `package = "X"` and X differs from the dep key.
+    /// These hardwire a specific implementation rather than coding against an interface.
+    pub hardwired_pkg_deps: Vec<(String, String)>,  // (dep_key, explicit_package_name)
 }
 
 /// Feature and version info for a single external (non-path) dependency.
@@ -83,6 +86,9 @@ pub struct Project {
     /// External (non-path, non-workspace) deps with their features and version.
     /// Keyed by the resolved package name (or dep key when no `package =` alias).
     pub external_deps: HashMap<String, ExternalDepInfo>,
+    /// Deps where `package = "X"` and X differs from the dep key.
+    /// These hardwire a specific implementation rather than coding against an interface.
+    pub hardwired_pkg_deps: Vec<(String, String)>,  // (dep_key, explicit_package_name)
 }
 
 /// A polylith profile: a named set of implementation selections applied workspace-wide.
