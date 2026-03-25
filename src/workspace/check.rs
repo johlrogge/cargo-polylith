@@ -511,9 +511,14 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
     }
 
     // --- hardwired impl dep checks (package = "X" where X != dep key) ---
+    // Only fire when the package name is a known polylith component or base —
+    // external crate aliases (e.g. `spa_sys = { package = "libspa-sys" }`) are fine.
     // Check bricks (components and bases)
     for brick in map.components.iter().chain(map.bases.iter()) {
         for (dep_key, pkg_name) in &brick.hardwired_pkg_deps {
+            if !all_brick_names.contains(pkg_name.as_str()) {
+                continue; // external crate rename — not a polylith impl dep
+            }
             violations.push(Violation {
                 kind: ViolationKind::HardwiredImplDep {
                     brick: brick.name.clone(),
@@ -530,6 +535,9 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
     // Check projects
     for project in &map.projects {
         for (dep_key, pkg_name) in &project.hardwired_pkg_deps {
+            if !all_brick_names.contains(pkg_name.as_str()) {
+                continue; // external crate rename — not a polylith impl dep
+            }
             violations.push(Violation {
                 kind: ViolationKind::HardwiredImplDep {
                     brick: project.name.clone(),
