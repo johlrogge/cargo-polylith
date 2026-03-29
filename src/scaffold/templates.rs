@@ -13,9 +13,8 @@ pub fn component_cargo_toml(name: &str, interface: &str) -> String {
 pub fn component_lib_rs(name: &str) -> String {
     format!(
         r#"mod {name};
-// Declare your public interface explicitly, e.g.:
+// Declare your public interface explicitly:
 // pub use {name}::{{MyType, my_function}};
-pub use {name}::*;
 "#
     )
 }
@@ -31,17 +30,9 @@ name = "{name}"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "{name}"
-path = "src/main.rs"
-
 [dependencies]
 "#
     )
-}
-
-pub fn base_main_rs() -> &'static str {
-    "fn main() {\n    println!(\"Hello from base!\");\n}\n"
 }
 
 pub fn base_lib_rs() -> &'static str {
