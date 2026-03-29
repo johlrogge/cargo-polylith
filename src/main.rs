@@ -16,7 +16,7 @@ fn main() {
     let workspace_root = args.workspace_root.as_deref();
 
     let result = match args.command {
-        PolylithCommand::Init => commands::init::run(),
+        PolylithCommand::Init => commands::init::run(workspace_root),
         PolylithCommand::Component { action } => {
             use cli::ComponentAction;
             match action {
