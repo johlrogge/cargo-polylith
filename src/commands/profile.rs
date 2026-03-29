@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::commands::validate::validate_brick_name;
 use crate::output::table;
-use crate::workspace::{build_workspace_map, discover_profiles, plan_root_demotion, resolve_profile_workspace, resolve_root};
+use crate::workspace::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, resolve_profile_workspace, resolve_root};
 
 pub fn list(json: bool, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -90,12 +90,16 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
         );
     }
 
-    // Build workspace map to get interface deps
-    let map = build_workspace_map(&root)?;
+    // Phase 1: collect only the interface path deps from root [workspace.dependencies].
+    // We use the targeted helper rather than building the full WorkspaceMap because
+    // Polylith.toml does not exist yet (demotion happens later in this function), and
+    // we only need the interface wiring diagram to write profiles/dev.profile and to
+    // strip workspace inheritance from bricks.  A full WorkspaceMap build would scan
+    // all components/bases/projects unnecessarily at this stage.
+    let root_interface_deps = collect_root_interface_deps(&root)?;
 
     // Collect interface deps: (key, path_string) pairs
-    let mut impl_pairs: Vec<(String, String)> = map
-        .root_workspace_interface_deps
+    let mut impl_pairs: Vec<(String, String)> = root_interface_deps
         .iter()
         .map(|(key, dep)| (key.clone(), dep.path.clone()))
         .collect();
@@ -119,7 +123,11 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
         eprintln!("Stripped workspace inheritance from {} brick(s)", stripped_count);
     }
 
-    // Re-read workspace map now that Polylith.toml exists — it will populate workspace_package
+    // Phase 2: now that Polylith.toml has been written and the root workspace demoted,
+    // build the full WorkspaceMap.  This second build is intentional and necessary:
+    // resolve_profile_workspace needs workspace_package from PolylithToml (which only
+    // exists after execute_root_demotion above writes Polylith.toml), so we cannot
+    // reuse the Phase 1 result here.
     let map = build_workspace_map(&root)?;
 
     // Discover the newly written profile and resolve + write the profile workspace

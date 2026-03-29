@@ -169,6 +169,38 @@ pub fn read_polylith_toml(root: &Path) -> Result<PolylithToml> {
         .ok_or_else(|| anyhow::anyhow!("Polylith.toml not found at {}", root.display()))
 }
 
+/// Collect only the path deps from `[workspace.dependencies]` in the root `Cargo.toml`.
+///
+/// This is a targeted, cheap alternative to `build_workspace_map` for the pre-migration
+/// phase of `profile migrate`. At that point, `Polylith.toml` does not yet exist, and we
+/// only need the interface wiring diagram (path deps) to write `profiles/dev.profile` and
+/// to strip workspace inheritance from bricks. Building the full `WorkspaceMap` would scan
+/// all components/bases/projects unnecessarily.
+///
+/// Returns a map of dep key → `WorkspacePathDep` for every path dep found in
+/// `[workspace.dependencies]`.
+pub fn collect_root_interface_deps(root: &Path) -> Result<std::collections::HashMap<String, WorkspacePathDep>> {
+    let toml_path = root.join("Cargo.toml");
+    let content = fs::read_to_string(&toml_path)
+        .with_context(|| format!("reading {}", toml_path.display()))?;
+    let doc: toml_edit::DocumentMut = content.parse()
+        .with_context(|| format!("parsing {}", toml_path.display()))?;
+    let mut map = std::collections::HashMap::new();
+    if let Some(ws_deps) = doc
+        .get("workspace")
+        .and_then(|w| w.get("dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        for (key, val) in ws_deps.iter() {
+            if let Some(path) = toml_str(val, "path") {
+                let package = toml_str(val, "package");
+                map.insert(key.to_string(), WorkspacePathDep { path, package });
+            }
+        }
+    }
+    Ok(map)
+}
+
 /// Analyse the root workspace and produce a `RootDemotionPlan` — pure read, no writes.
 ///
 /// Reads root `Cargo.toml` to extract `[workspace.package]` metadata and non-path
