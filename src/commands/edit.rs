@@ -82,8 +82,8 @@ fn run_loop(
                     }
                     match key.code {
                         KeyCode::Char('q') => {
-                            let dirty = app.modified_cols.iter().any(|&m| m)
-                                || app.modified_rows.iter().any(|&m| m);
+                            let dirty = app.grid.modified_cols.iter().any(|&m| m)
+                                || app.grid.modified_rows.iter().any(|&m| m);
                             if dirty && !app.confirm_quit {
                                 app.status = "Unsaved changes — press w to save or q again to quit".into();
                                 app.confirm_quit = true;
@@ -133,8 +133,8 @@ fn run_loop(
                             }
                         }
                         KeyCode::Char('G') => {
-                            if !app.rows.is_empty() {
-                                app.cursor_row = app.rows.len() - 1;
+                            if !app.grid.rows.is_empty() {
+                                app.cursor_row = app.grid.rows.len() - 1;
                             }
                         }
                         KeyCode::Char('i') => app.start_edit_interface(),

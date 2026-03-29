@@ -1,7 +1,7 @@
 pub mod templates;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use toml_edit::DocumentMut;
@@ -9,6 +9,106 @@ use toml_edit::DocumentMut;
 use crate::workspace::{ResolvedProfileWorkspace, RootDemotionPlan};
 
 use templates::*;
+
+/// Which polylith brick directory a dep entry lives in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BrickKind {
+    Component,
+    Base,
+}
+
+/// Minimal description of one row (component or base) needed to update a
+/// project's `[dependencies]`. Passed to [`write_project_deps`] by the TUI
+/// rather than reaching directly into TUI-layer types.
+#[derive(Debug, Clone)]
+pub struct DepEntry {
+    pub name: String,
+    pub interface: Option<String>,
+    pub kind: BrickKind,
+    pub path: PathBuf,
+    /// Whether this entry should be a direct dependency of the project.
+    pub selected: bool,
+}
+
+/// Update `[dependencies]` in the project's Cargo.toml: add path deps for
+/// direct-dep rows, remove brick path deps for deselected rows, leave external
+/// deps untouched.
+pub fn write_project_deps(project_path: &Path, entries: &[DepEntry]) -> Result<()> {
+    let manifest_path = project_path.join("Cargo.toml");
+    let content = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let mut doc: DocumentMut = content.parse().context("parsing Cargo.toml")?;
+
+    if doc.get("dependencies").is_none() {
+        doc["dependencies"] = toml_edit::table();
+    }
+    let deps = doc["dependencies"]
+        .as_table_mut()
+        .context("[dependencies] is not a table")?;
+
+    for entry in entries {
+        // Use the polylith interface name as the dep key when it differs from the
+        // crate name — this enables substitution (e.g. stub vs real) without
+        // changing call-site code. Cargo's `package` key handles the rename.
+        let dep_key = entry
+            .interface
+            .as_deref()
+            .filter(|iface| *iface != entry.name.as_str())
+            .unwrap_or(&entry.name);
+
+        if entry.selected {
+            if deps.get(dep_key).is_none() {
+                let kind_dir = match entry.kind {
+                    BrickKind::Component => "components",
+                    BrickKind::Base => "bases",
+                };
+                let dir_name = entry
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let path_str = format!("../../{}/{}", kind_dir, dir_name);
+                let mut tbl = toml_edit::InlineTable::new();
+                tbl.insert("path", toml_edit::Value::from(path_str));
+                if dep_key != entry.name.as_str() {
+                    tbl.insert("package", toml_edit::Value::from(entry.name.clone()));
+                }
+                deps[dep_key] =
+                    toml_edit::Item::Value(toml_edit::Value::InlineTable(tbl));
+            }
+        } else if is_brick_dep(deps, dep_key) {
+            deps.remove(dep_key);
+        }
+    }
+
+    fs::write(&manifest_path, doc.to_string())
+        .with_context(|| format!("writing {}", manifest_path.display()))?;
+    Ok(())
+}
+
+/// Returns true if the dep entry has a `path` value pointing into components/ or bases/.
+fn is_brick_dep(deps: &toml_edit::Table, name: &str) -> bool {
+    let path_str = deps
+        .get(name)
+        .and_then(|item| {
+            item.as_value()
+                .and_then(|v| v.as_inline_table())
+                .and_then(|t| t.get("path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_owned())
+                .or_else(|| {
+                    item.as_table()
+                        .and_then(|t| t.get("path"))
+                        .and_then(|v| v.as_value())
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_owned())
+                })
+        });
+    path_str
+        .as_deref()
+        .map(|p| p.contains("/components/") || p.contains("/bases/"))
+        .unwrap_or(false)
+}
 
 /// Create the three polylith top-level directories and `.cargo/config.toml`.
 pub fn init_workspace(root: &Path) -> Result<Vec<String>> {

@@ -49,7 +49,7 @@ pub enum FoldEntry {
 /// "simple"        → "s"
 /// ```
 pub fn compact(name: &str) -> String {
-    name.split(|c| c == '-' || c == '_')
+    name.split(['-', '_'])
         .filter_map(|seg| seg.chars().next())
         .map(|c| c.to_string())
         .collect::<Vec<_>>()
@@ -146,7 +146,7 @@ pub fn min_group_height(names: &[&str]) -> usize {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn split_segs(name: &str) -> Vec<&str> {
-    name.split(|c| c == '-' || c == '_').collect()
+    name.split(['-', '_']).collect()
 }
 
 /// Number of leading segment positions where all names share the same value.
