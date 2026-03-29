@@ -33,17 +33,18 @@ pub enum DepKind<'a> {
 /// 4. Otherwise → `DepKind::External`
 pub fn classify_dep<'a>(dep: &str, map: &'a WorkspaceMap) -> DepKind<'a> {
     // Priority 1: base name
-    if let Some(base) = map.bases.iter().find(|b| b.name == dep) {
-        return DepKind::Base(base.name.as_str());
+    if let Some(&idx) = map.base_by_name.get(dep) {
+        return DepKind::Base(map.bases[idx].name.as_str());
     }
     // Priority 2: component package name → resolve to interface
-    if let Some(comp) = map.components.iter().find(|c| c.name == dep) {
+    if let Some(&idx) = map.component_by_name.get(dep) {
+        let comp = &map.components[idx];
         let iface = comp.interface.as_deref().unwrap_or(comp.name.as_str());
         return DepKind::Interface(iface);
     }
     // Priority 3: component interface name
-    if let Some(comp) = map.components.iter().find(|c| c.interface.as_deref() == Some(dep)) {
-        return DepKind::Interface(comp.interface.as_deref().unwrap());
+    if let Some(&idx) = map.component_by_interface.get(dep) {
+        return DepKind::Interface(map.components[idx].interface.as_deref().unwrap());
     }
     DepKind::External
 }

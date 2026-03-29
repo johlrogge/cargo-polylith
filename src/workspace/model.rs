@@ -125,6 +125,15 @@ pub struct WorkspaceMap {
     pub root_workspace_interface_deps: HashMap<String, WorkspacePathDep>,
     /// Parsed `Polylith.toml` if present at root, `None` for legacy workspaces.
     pub polylith_toml: Option<PolylithToml>,
+    /// Index: component name → index into `components`. Derived from `components`.
+    #[serde(skip)]
+    pub component_by_name: HashMap<String, usize>,
+    /// Index: component interface name → index into `components`. Derived from `components`.
+    #[serde(skip)]
+    pub component_by_interface: HashMap<String, usize>,
+    /// Index: base name → index into `bases`. Derived from `bases`.
+    #[serde(skip)]
+    pub base_by_name: HashMap<String, usize>,
 }
 
 /// Plan produced by analysing the root workspace before migration.

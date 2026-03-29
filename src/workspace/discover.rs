@@ -147,7 +147,7 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
 
     let is_workspace = is_workspace || polylith_toml.is_some();
 
-    Ok(WorkspaceMap {
+    let mut map = WorkspaceMap {
         root: root.to_path_buf(),
         components,
         bases,
@@ -157,7 +157,20 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
         root_workspace_deps,
         root_workspace_interface_deps,
         polylith_toml,
-    })
+        component_by_name: std::collections::HashMap::new(),
+        component_by_interface: std::collections::HashMap::new(),
+        base_by_name: std::collections::HashMap::new(),
+    };
+    map.component_by_name = map.components.iter().enumerate()
+        .map(|(i, c)| (c.name.clone(), i))
+        .collect();
+    map.component_by_interface = map.components.iter().enumerate()
+        .flat_map(|(i, c)| c.interface.iter().map(move |iface| (iface.clone(), i)))
+        .collect();
+    map.base_by_name = map.bases.iter().enumerate()
+        .map(|(i, b)| (b.name.clone(), i))
+        .collect();
+    Ok(map)
 }
 
 /// Read `Polylith.toml` from the given root directory, returning an error if not present.
@@ -1122,6 +1135,9 @@ mod tests {
             root_workspace_deps: HashMap::new(),
             root_workspace_interface_deps,
             polylith_toml: None,
+            component_by_name: HashMap::new(),
+            component_by_interface: HashMap::new(),
+            base_by_name: HashMap::new(),
         };
 
         // Profile selects store_file for the "store" interface
@@ -1216,5 +1232,43 @@ prod = "profiles/prod.profile"
 
         assert_eq!(pt.profiles.len(), 2);
         assert_eq!(pt.profiles.get("dev").map(|s| s.as_str()), Some("profiles/dev.profile"));
+    }
+
+    #[test]
+    fn workspace_map_indexes_are_populated() {
+        let map = build_workspace_map(&fixture()).unwrap();
+        // component_by_name index: every component should be reachable by name
+        for (i, comp) in map.components.iter().enumerate() {
+            let &idx = map.component_by_name.get(&comp.name)
+                .unwrap_or_else(|| panic!("component '{}' missing from component_by_name", comp.name));
+            assert_eq!(idx, i);
+        }
+        // base_by_name index: every base should be reachable by name
+        for (i, base) in map.bases.iter().enumerate() {
+            let &idx = map.base_by_name.get(&base.name)
+                .unwrap_or_else(|| panic!("base '{}' missing from base_by_name", base.name));
+            assert_eq!(idx, i);
+        }
+        // component_by_interface index: every component with an interface should be reachable
+        for (i, comp) in map.components.iter().enumerate() {
+            if let Some(iface) = &comp.interface {
+                let &idx = map.component_by_interface.get(iface)
+                    .unwrap_or_else(|| panic!("interface '{}' missing from component_by_interface", iface));
+                assert_eq!(idx, i);
+            }
+        }
+    }
+
+    #[test]
+    fn classify_dep_uses_indexes() {
+        use super::super::{classify_dep, DepKind};
+        let map = build_workspace_map(&fixture()).unwrap();
+        // "logger" and "parser" are components in the fixture
+        assert_eq!(classify_dep("logger", &map), DepKind::Interface("logger"));
+        assert_eq!(classify_dep("parser", &map), DepKind::Interface("parser"));
+        // "cli" is a base
+        assert_eq!(classify_dep("cli", &map), DepKind::Base("cli"));
+        // unknown name
+        assert_eq!(classify_dep("nonexistent_crate", &map), DepKind::External);
     }
 }
