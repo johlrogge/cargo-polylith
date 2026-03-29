@@ -137,29 +137,29 @@ pub fn print_check(violations: &[Violation]) {
     }
     println!("{}", format!("{} violation(s) found:", violations.len()).red().bold());
     for v in violations {
-        let tag = match v.kind {
-            ViolationKind::OrphanComponent      => "orphan".yellow().to_string(),
-            ViolationKind::WildcardReExport     => "wildcard".yellow().to_string(),
-            ViolationKind::BaseHasMainRs        => "base-has-main".yellow().to_string(),
-            ViolationKind::ProjectMissingBase   => "no-base".yellow().to_string(),
-            ViolationKind::NotInRootWorkspace   => "not-in-workspace".yellow().to_string(),
-            ViolationKind::AmbiguousInterface   => "ambiguous-interface".yellow().to_string(),
-            ViolationKind::DuplicateName        => "duplicate-name".yellow().to_string(),
-            ViolationKind::MissingInterface     => "missing-interface".yellow().to_string(),
-            ViolationKind::BaseMissingLibRs     => "missing-lib".red().to_string(),
-            ViolationKind::MissingLibRs         => "missing-lib".red().to_string(),
-            ViolationKind::MissingImplFile      => "missing-impl".red().to_string(),
-            ViolationKind::DepKeyMismatch { .. } => "dep-key-mismatch".red().to_string(),
-            ViolationKind::ProjectFeatureDrift { .. } => "project-feature-drift".yellow().to_string(),
-            ViolationKind::ProjectVersionDrift { .. } => "project-version-drift".yellow().to_string(),
+        let tag = match &v.kind {
+            ViolationKind::OrphanComponent { .. }      => "orphan".yellow().to_string(),
+            ViolationKind::WildcardReExport { .. }     => "wildcard".yellow().to_string(),
+            ViolationKind::BaseHasMainRs { .. }        => "base-has-main".yellow().to_string(),
+            ViolationKind::ProjectMissingBase { .. }   => "no-base".yellow().to_string(),
+            ViolationKind::NotInRootWorkspace { .. }   => "not-in-workspace".yellow().to_string(),
+            ViolationKind::AmbiguousInterface { .. }   => "ambiguous-interface".yellow().to_string(),
+            ViolationKind::DuplicateName { .. }        => "duplicate-name".yellow().to_string(),
+            ViolationKind::MissingInterface { .. }     => "missing-interface".yellow().to_string(),
+            ViolationKind::BaseMissingLibRs { .. }     => "missing-lib".red().to_string(),
+            ViolationKind::MissingLibRs { .. }         => "missing-lib".red().to_string(),
+            ViolationKind::MissingImplFile { .. }      => "missing-impl".red().to_string(),
+            ViolationKind::DepKeyMismatch { .. }       => "dep-key-mismatch".red().to_string(),
+            ViolationKind::ProjectFeatureDrift { .. }  => "project-feature-drift".yellow().to_string(),
+            ViolationKind::ProjectVersionDrift { .. }  => "project-version-drift".yellow().to_string(),
             ViolationKind::ProjectNotInRootWorkspace { .. } => "project-not-in-workspace".red().to_string(),
             ViolationKind::ProjectHasOwnWorkspace { .. } => "project-has-own-workspace".red().to_string(),
             ViolationKind::ProfileImplPathNotFound { .. } => "profile-impl-not-found".red().to_string(),
             ViolationKind::ProfileImplNotAComponent { .. } => "profile-impl-not-component".red().to_string(),
-            ViolationKind::HardwiredDep { .. } => "hardwired-dep".yellow().to_string(),
-            ViolationKind::HardwiredImplDep { .. } => "hardwired-impl".red().to_string(),
+            ViolationKind::HardwiredDep { .. }         => "hardwired-dep".yellow().to_string(),
+            ViolationKind::HardwiredImplDep { .. }     => "hardwired-impl".red().to_string(),
         };
-        println!("  [{tag}] {}", v.message);
+        println!("  [{tag}] {}", v.kind);
     }
 }
 
