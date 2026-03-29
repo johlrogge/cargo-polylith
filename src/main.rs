@@ -8,6 +8,7 @@ mod workspace;
 
 use clap::Parser;
 use cli::{CargoCommand, PolylithCommand};
+use commands::CommandError;
 
 fn main() {
     let cargo = cli::Cargo::parse();
@@ -85,6 +86,9 @@ fn main() {
     };
 
     if let Err(e) = result {
+        if let Some(CommandError::ProcessExit(code)) = e.downcast_ref::<CommandError>() {
+            std::process::exit(*code);
+        }
         eprintln!("error: {e:#}");
         std::process::exit(1);
     }
