@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::commands::CommandError;
 use crate::output::table;
 use crate::workspace::{
     build_workspace_map, check::is_warning_kind, check_profile, discover_profiles, resolve_root,
@@ -42,7 +43,7 @@ pub fn run(json: bool, profile_name: Option<&str>, workspace_root: Option<&Path>
     }
 
     if violations.iter().any(|v| !is_warning_kind(&v.kind)) {
-        std::process::exit(1);
+        anyhow::bail!(CommandError::ProcessExit(1));
     }
 
     Ok(())

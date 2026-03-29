@@ -1,4 +1,5 @@
 pub mod base;
+pub mod error;
 pub mod generate;
 pub mod mcp;
 pub mod check;
@@ -11,3 +12,5 @@ pub mod profile;
 pub mod project;
 pub mod status;
 pub mod validate;
+
+pub use error::CommandError;

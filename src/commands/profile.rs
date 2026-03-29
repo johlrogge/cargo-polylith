@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::commands::validate::validate_brick_name;
+use crate::commands::CommandError;
 use crate::output::table;
 use crate::workspace::{build_workspace_map, discover_profiles, plan_root_demotion, resolve_profile_workspace, resolve_root};
 
@@ -205,7 +206,7 @@ pub fn run_cargo(profile_name: &str, cargo_args: &[String], workspace_root: Opti
         .context("failed to invoke cargo")?;
 
     if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
+        anyhow::bail!(CommandError::ProcessExit(status.code().unwrap_or(1)));
     }
 
     Ok(())
