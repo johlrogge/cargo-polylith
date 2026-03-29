@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use super::model::WorkspaceMap;
-use super::{classify_dep, DepKind};
+use super::{classify_dep, transitive_closure, DepKind};
 
 /// A single violation found during `check`.
 #[derive(Debug, Clone, Serialize)]
@@ -109,28 +109,31 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
 
     // Resolve a dep key (which may be an interface alias) to the component package
     // name(s) it refers to. Returns an empty vec for bases and external crates.
-    let resolve_dep = |dep: &str| -> Vec<&str> {
+    let resolve_dep = |dep: &str| -> Vec<String> {
         match classify_dep(dep, map) {
             DepKind::Interface(iface) => map
                 .components
                 .iter()
                 .filter(|c| c.name == iface || c.interface.as_deref() == Some(iface))
-                .map(|c| c.name.as_str())
+                .map(|c| c.name.clone())
                 .collect(),
             _ => vec![],
         }
     };
 
     // Transitive closure: all components reachable from any base or project.
-    // The queue contains component *package names* (not interface aliases) so that
+    // Seeds are component *package names* (not interface aliases) so that
     // comp_deps lookups work correctly.
     let comp_deps: std::collections::HashMap<&str, &[String]> = map
         .components
         .iter()
         .map(|c| (c.name.as_str(), c.deps.as_slice()))
         .collect();
-    let mut depended_on: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut queue: std::collections::VecDeque<&str> = map
+    let get_deps = |name: &str| -> Vec<String> {
+        comp_deps.get(name).copied().unwrap_or(&[]).to_vec()
+    };
+
+    let seeds_from_bricks: Vec<String> = map
         .bases
         .iter()
         .flat_map(|b| b.deps.iter().flat_map(|d| resolve_dep(d)))
@@ -138,44 +141,50 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
             p.deps.iter().flat_map(|dep_name| resolve_dep(dep_name))
         }))
         .collect();
-    while let Some(name) = queue.pop_front() {
-        if depended_on.insert(name) {
-            if let Some(deps) = comp_deps.get(name) {
-                for d in *deps {
-                    for resolved in resolve_dep(d) {
-                        queue.push_back(resolved);
-                    }
-                }
-            }
-        }
-    }
+    let mut depended_on = transitive_closure(
+        seeds_from_bricks,
+        get_deps,
+        resolve_dep,
+    );
 
     // Seed depended_on from profile implementations: any component selected by a
     // profile is considered used, even if no base or project directly depends on it.
-    for profile in profiles {
-        for impl_path in profile.implementations.values() {
+    let profile_seeds: Vec<String> = profiles
+        .iter()
+        .flat_map(|profile| profile.implementations.values())
+        .filter_map(|impl_path| {
             let abs = map.root.join(impl_path);
             let abs_canon = abs.canonicalize().unwrap_or(abs);
-            if let Some(comp) = map.components.iter().find(|c| {
+            map.components.iter().find(|c| {
                 c.path.canonicalize().unwrap_or_else(|_| c.path.clone()) == abs_canon
-            }) {
-                queue.push_back(comp.name.as_str());
-            }
+            })
+        })
+        .map(|comp| comp.name.clone())
+        .collect();
+    // Rebuild closures (the originals were moved into the first transitive_closure call
+    // above; closures over HashMap do not implement Copy).
+    let get_deps = |name: &str| -> Vec<String> {
+        comp_deps.get(name).copied().unwrap_or(&[]).to_vec()
+    };
+    let resolve_dep = |dep: &str| -> Vec<String> {
+        match classify_dep(dep, map) {
+            DepKind::Interface(iface) => map
+                .components
+                .iter()
+                .filter(|c| c.name == iface || c.interface.as_deref() == Some(iface))
+                .map(|c| c.name.clone())
+                .collect(),
+            _ => vec![],
         }
-    }
+    };
     // Run BFS again for any components added via profile selections (they may
     // themselves depend on other components).
-    while let Some(name) = queue.pop_front() {
-        if depended_on.insert(name) {
-            if let Some(deps) = comp_deps.get(name) {
-                for d in *deps {
-                    for resolved in resolve_dep(d) {
-                        queue.push_back(resolved);
-                    }
-                }
-            }
-        }
-    }
+    let profile_reachable = transitive_closure(
+        profile_seeds,
+        get_deps,
+        resolve_dep,
+    );
+    depended_on.extend(profile_reachable);
 
     // --- component checks ---
     for comp in &map.components {
@@ -338,7 +347,7 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
         }
     }
     for (iface, impls) in &by_interface {
-        if impls.len() > 1 && !impls.iter().any(|n| *n == *iface) {
+        if impls.len() > 1 && !impls.contains(iface) {
             violations.push(Violation {
                 kind: ViolationKind::AmbiguousInterface,
                 message: format!(

@@ -256,21 +256,17 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         let row_kind = app.rows[row_i].kind;
 
         // Section header before first component
-        if row_i < n_components && n_components > 0 && !components_header_shown {
-            if display_y < bottom {
-                draw_section_header(frame, inner, display_y, "── components");
-                display_y += 1;
-                components_header_shown = true;
-            }
+        if row_i < n_components && n_components > 0 && !components_header_shown && display_y < bottom {
+            draw_section_header(frame, inner, display_y, "── components");
+            display_y += 1;
+            components_header_shown = true;
         }
 
         // Section header before first base
-        if row_i >= n_components && n_bases > 0 && !bases_header_shown {
-            if display_y < bottom {
-                draw_section_header(frame, inner, display_y, "── bases");
-                display_y += 1;
-                bases_header_shown = true;
-            }
+        if row_i >= n_components && n_bases > 0 && !bases_header_shown && display_y < bottom {
+            draw_section_header(frame, inner, display_y, "── bases");
+            display_y += 1;
+            bases_header_shown = true;
         }
 
         if display_y >= bottom {
@@ -370,7 +366,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let (ch, style) = if let Some(pos) = chain_mark {
                 match pos {
-                    ChainPosition::Upstream { step } if step == 1 => {
+                    ChainPosition::Upstream { step: 1 } => {
                         // Direct-dep entry point: light green bullet
                         (
                             "\u{25cf}".to_string(), // ●
