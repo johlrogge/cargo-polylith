@@ -366,11 +366,7 @@ impl App {
 
     pub fn confirm_create_project(&mut self) -> Result<()> {
         let name = self.input_buffer.trim().to_owned();
-        anyhow::ensure!(!name.is_empty(), "project name cannot be empty");
-        anyhow::ensure!(
-            name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_'),
-            "project name must contain only alphanumeric characters, hyphens, or underscores"
-        );
+        crate::commands::validate::validate_brick_name(&name)?;
 
         crate::scaffold::create_project(&self.workspace_root, &name)
             .with_context(|| format!("creating project '{name}'"))?;
