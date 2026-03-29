@@ -3,6 +3,7 @@ mod commands;
 mod corsett;
 mod output;
 mod scaffold;
+mod toml_utils;
 mod tui;
 mod workspace;
 

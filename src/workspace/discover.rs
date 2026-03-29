@@ -464,19 +464,7 @@ fn toml_str(item: &toml_edit::Item, key: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Extract a bool value from a TOML item by key (inline or regular table).
-fn toml_bool(item: &toml_edit::Item, key: &str) -> Option<bool> {
-    item.as_value()
-        .and_then(|v| v.as_inline_table())
-        .and_then(|t| t.get(key))
-        .and_then(|v| v.as_bool())
-        .or_else(|| {
-            item.as_table()
-                .and_then(|t| t.get(key))
-                .and_then(|i| i.as_value())
-                .and_then(|v| v.as_bool())
-        })
-}
+use crate::toml_utils::toml_bool;
 
 fn parse_version_from_item(v: &toml_edit::Item) -> Option<String> {
     // bare string: `serde = "1.0"`
