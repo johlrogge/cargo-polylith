@@ -467,7 +467,7 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
         };
         bricks.push(Brick {
             name,
-            kind: kind.clone(),
+            kind,
             path: path.clone(),
             deps,
             manifest_path,

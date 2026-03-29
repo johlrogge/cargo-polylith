@@ -1,4 +1,5 @@
 use super::model::WorkspaceMap;
+use super::transitive_closure;
 
 #[derive(Debug)]
 pub struct StatusReport {
@@ -41,29 +42,25 @@ pub fn run_status(map: &WorkspaceMap) -> StatusReport {
         map.bases.iter().map(|b| b.name.as_str()).collect();
 
     // --- component checks ---
-    // Build transitive closure: all components reachable from any base.
+    // Build transitive closure: all components reachable from any base or project.
     // A component used only by another component (not directly by a base) is still "used".
+    // Status uses raw dep-key identity (no interface alias resolution).
     let comp_deps: std::collections::HashMap<&str, &[String]> = map
         .components
         .iter()
         .map(|c| (c.name.as_str(), c.deps.as_slice()))
         .collect();
-    let mut depended_on: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut queue: std::collections::VecDeque<&str> = map
+    let seeds: Vec<String> = map
         .bases
         .iter()
-        .flat_map(|b| b.deps.iter().map(|d| d.as_str()))
-        .chain(map.projects.iter().flat_map(|p| p.deps.iter().map(|d| d.as_str())))
+        .flat_map(|b| b.deps.iter().cloned())
+        .chain(map.projects.iter().flat_map(|p| p.deps.iter().cloned()))
         .collect();
-    while let Some(name) = queue.pop_front() {
-        if depended_on.insert(name) {
-            if let Some(deps) = comp_deps.get(name) {
-                for d in *deps {
-                    queue.push_back(d.as_str());
-                }
-            }
-        }
-    }
+    let depended_on = transitive_closure(
+        seeds,
+        |name| comp_deps.get(name).copied().unwrap_or(&[]).to_vec(),
+        |dep_key| vec![dep_key.to_owned()],
+    );
 
     let mut explicit_count = 0usize;
 
