@@ -354,7 +354,12 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                 .get("interface")
                 .and_then(|v| v.as_str())
                 .unwrap_or(comp_name);
-            match validate_brick_name(comp_name).and_then(|()| scaffold::create_component(root, comp_name, interface)) {
+            let r: anyhow::Result<()> = (|| {
+                validate_brick_name(comp_name)?;
+                scaffold::create_component(root, comp_name, interface)?;
+                Ok(())
+            })();
+            match r {
                 Ok(()) => Ok(format!("created component '{comp_name}' with interface '{interface}'")),
                 Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
@@ -365,7 +370,12 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                 Some(s) if !s.is_empty() => s,
                 _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
             };
-            match validate_brick_name(base_name).and_then(|()| scaffold::create_base(root, base_name)) {
+            let r: anyhow::Result<()> = (|| {
+                validate_brick_name(base_name)?;
+                scaffold::create_base(root, base_name)?;
+                Ok(())
+            })();
+            match r {
                 Ok(()) => Ok(format!("created base '{base_name}'")),
                 Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
@@ -376,7 +386,12 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                 Some(s) if !s.is_empty() => s,
                 _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
             };
-            match validate_brick_name(project_name).and_then(|()| scaffold::create_project(root, project_name)) {
+            let r: anyhow::Result<()> = (|| {
+                validate_brick_name(project_name)?;
+                scaffold::create_project(root, project_name)?;
+                Ok(())
+            })();
+            match r {
                 Ok(()) => Ok(format!("created project '{project_name}'")),
                 Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
@@ -412,7 +427,12 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                 Some(s) if !s.is_empty() => s,
                 _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
             };
-            match validate_brick_name(profile_name).and_then(|()| scaffold::create_profile(root, profile_name)) {
+            let r: anyhow::Result<()> = (|| {
+                validate_brick_name(profile_name)?;
+                scaffold::create_profile(root, profile_name)?;
+                Ok(())
+            })();
+            match r {
                 Ok(()) => Ok(format!("created profile '{profile_name}'")),
                 Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
