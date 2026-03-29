@@ -1,43 +1,54 @@
-use serde::Serialize;
+use std::fmt;
+
+use serde::ser::SerializeStruct;
+use serde::{Serialize, Serializer};
 
 use super::model::WorkspaceMap;
 use super::{classify_dep, transitive_closure, DepKind};
 
 /// A single violation found during `check`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Violation {
     pub kind: ViolationKind,
-    pub message: String,
+}
+
+impl Serialize for Violation {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut s = serializer.serialize_struct("Violation", 2)?;
+        s.serialize_field("kind", &self.kind)?;
+        s.serialize_field("message", &self.kind.to_string())?;
+        s.end()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ViolationKind {
     /// A component is missing its expected lib.rs re-export file.
-    MissingLibRs,
+    MissingLibRs { brick: String },
     /// A component is missing its implementation file (`src/<name>.rs`).
-    MissingImplFile,
+    MissingImplFile { brick: String },
     /// A base is missing its `src/lib.rs` — bases must expose a runtime API as a library.
-    BaseMissingLibRs,
+    BaseMissingLibRs { brick: String },
     /// A base has a `src/main.rs` — executable entry points belong in projects, not bases.
-    BaseHasMainRs,
+    BaseHasMainRs { brick: String },
     /// A component is not depended on by any base or project (potential dead code).
-    OrphanComponent,
+    OrphanComponent { brick: String },
     /// A component's lib.rs uses a wildcard re-export (`pub use <name>::*`).
-    WildcardReExport,
+    WildcardReExport { brick: String, rust_name: String },
     /// A project has no dependency on any base.
-    ProjectMissingBase,
+    ProjectMissingBase { project: String },
     /// A component or base exists in its polylith directory but is not listed in the root
     /// workspace members, so `cargo build --workspace` will silently ignore it.
-    NotInRootWorkspace,
+    NotInRootWorkspace { brick: String, kind_label: String, rel: String },
     /// Two or more components declare the same interface name but none has a package name
     /// matching the interface — every consumer must `[patch]` explicitly (no default impl).
-    AmbiguousInterface,
+    AmbiguousInterface { interface: String, impls: Vec<String> },
     /// Two or more components share the same package name — likely a stub that was named
     /// identically to the real component instead of getting a distinct name.
-    DuplicateName,
+    DuplicateName { name: String, paths: Vec<String> },
     /// A component has no `interface` declared in `[package.metadata.polylith]`.
-    MissingInterface,
+    MissingInterface { brick: String },
     /// A project's path dependency key doesn't match the target's `package.name`
     /// and no `package = "..."` alias was provided.
     DepKeyMismatch {
@@ -65,10 +76,11 @@ pub enum ViolationKind {
     /// A project exists under projects/ but is not listed in root workspace members.
     ProjectNotInRootWorkspace {
         project: String,
+        rel: String,
     },
     /// A project's Cargo.toml has its own `[workspace]` section — it must be a plain
     /// bin crate in the root workspace instead.
-    ProjectHasOwnWorkspace { project: String },
+    ProjectHasOwnWorkspace { project: String, rel: String },
     /// A profile's implementation path does not exist under the workspace root.
     ProfileImplPathNotFound {
         profile: String,
@@ -94,6 +106,75 @@ pub enum ViolationKind {
         dep: String,
         package: String,
     },
+}
+
+impl fmt::Display for ViolationKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ViolationKind::MissingLibRs { brick } => {
+                write!(f, "component '{brick}': src/lib.rs is missing")
+            }
+            ViolationKind::MissingImplFile { brick } => {
+                write!(f, "component '{brick}': src/{brick}.rs is missing")
+            }
+            ViolationKind::BaseMissingLibRs { brick } => {
+                write!(f, "base '{brick}': src/lib.rs is missing — bases must expose a runtime API as a library function")
+            }
+            ViolationKind::BaseHasMainRs { brick } => {
+                write!(f, "base '{brick}': src/main.rs should be in a project, not a base — bases expose library functions like `run()` that projects call")
+            }
+            ViolationKind::OrphanComponent { brick } => {
+                write!(f, "component '{brick}' is not used by any base, project, or profile")
+            }
+            ViolationKind::WildcardReExport { brick, rust_name } => {
+                write!(f, "component '{brick}': lib.rs uses wildcard re-export — consider explicit `pub use {rust_name}::{{Type, fn}};`")
+            }
+            ViolationKind::ProjectMissingBase { project } => {
+                write!(f, "project '{project}' has no base dependency — polylith projects must include at least one base")
+            }
+            ViolationKind::NotInRootWorkspace { brick, kind_label, rel } => {
+                write!(f, "{kind_label} '{brick}' is not listed in root workspace members — add '{rel}' to [workspace] members in Cargo.toml")
+            }
+            ViolationKind::AmbiguousInterface { interface, impls } => {
+                write!(f, "interface '{interface}' has {} implementations ({}) but none has the default package name — every consumer must explicitly declare which implementation to use (path + package = \"...\")", impls.len(), impls.join(", "))
+            }
+            ViolationKind::DuplicateName { name, paths } => {
+                write!(f, "package name '{name}' is used by {} bricks ({}) — give each a distinct name and declare `[package.metadata.polylith] interface = \"{name}\"` on both", paths.len(), paths.join(", "))
+            }
+            ViolationKind::MissingInterface { brick } => {
+                write!(f, "component '{brick}' has no `[package.metadata.polylith] interface = \"...\"` declaration — add interface metadata or run `cargo polylith edit` to set it")
+            }
+            ViolationKind::DepKeyMismatch { project, dep_key, expected_name, path } => {
+                write!(f, "project '{project}': dep key '{dep_key}' does not match package name '{expected_name}' at {path} — use the correct package name as the dep key, or add `package = \"{expected_name}\"` as an alias")
+            }
+            ViolationKind::ProjectFeatureDrift { project, dep, project_features, workspace_features } => {
+                let proj_set: std::collections::HashSet<_> = project_features.iter().collect();
+                let missing: Vec<&String> = workspace_features.iter().filter(|f| !proj_set.contains(f)).collect();
+                write!(f, "project '{project}': dep '{dep}' standalone build is missing workspace features {missing:?}")
+            }
+            ViolationKind::ProjectVersionDrift { project, dep, project_version, workspace_version } => {
+                write!(f, "project '{project}': dep '{dep}' version '{project_version}' differs from workspace version '{workspace_version}' — standalone build may resolve a different version")
+            }
+            ViolationKind::ProjectNotInRootWorkspace { project, rel } => {
+                write!(f, "project '{project}' is not listed in root workspace members — add '{rel}' to [workspace] members in Cargo.toml")
+            }
+            ViolationKind::ProjectHasOwnWorkspace { project, rel } => {
+                write!(f, "project '{project}' has its own [workspace] section — remove it from {rel}/Cargo.toml and add the project to the root workspace members")
+            }
+            ViolationKind::ProfileImplPathNotFound { profile, interface, path } => {
+                write!(f, "profile '{profile}': implementation path '{path}' for interface '{interface}' does not exist")
+            }
+            ViolationKind::ProfileImplNotAComponent { profile, interface, path } => {
+                write!(f, "profile '{profile}': '{path}' for interface '{interface}' is not a known workspace component")
+            }
+            ViolationKind::HardwiredDep { brick, dep } => {
+                write!(f, "'{brick}' has a direct path dep on '{dep}' — consider using `{{ workspace = true }}` and the profile wiring diagram")
+            }
+            ViolationKind::HardwiredImplDep { brick, dep, package } => {
+                write!(f, "'{brick}': dep '{dep}' uses `package = \"{package}\"` — this hardwires a specific implementation instead of coding against the interface")
+            }
+        }
+    }
 }
 
 /// Run all structural checks against `map` and return any violations found.
@@ -191,19 +272,14 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
         let lib_rs = comp.path.join("src/lib.rs");
         if !lib_rs.exists() {
             violations.push(Violation {
-                kind: ViolationKind::MissingLibRs,
-                message: format!("component '{}': src/lib.rs is missing", comp.name),
+                kind: ViolationKind::MissingLibRs { brick: comp.name.clone() },
             });
 
             // No lib.rs and no impl file → also flag MissingImplFile
             let impl_file = comp.path.join("src").join(format!("{}.rs", comp.name));
             if !impl_file.exists() {
                 violations.push(Violation {
-                    kind: ViolationKind::MissingImplFile,
-                    message: format!(
-                        "component '{}': src/{}.rs is missing",
-                        comp.name, comp.name
-                    ),
+                    kind: ViolationKind::MissingImplFile { brick: comp.name.clone() },
                 });
             }
         } else {
@@ -214,11 +290,10 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
 
             if content.contains(&wildcard) {
                 violations.push(Violation {
-                    kind: ViolationKind::WildcardReExport,
-                    message: format!(
-                        "component '{}': lib.rs uses wildcard re-export — consider explicit `pub use {}::{{Type, fn}};`",
-                        comp.name, rust_name
-                    ),
+                    kind: ViolationKind::WildcardReExport {
+                        brick: comp.name.clone(),
+                        rust_name,
+                    },
                 });
             }
             // If lib.rs exists, any layout (flat, submodule, re-export from deps) is valid.
@@ -226,8 +301,7 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
 
         if !depended_on.contains(comp.name.as_str()) {
             violations.push(Violation {
-                kind: ViolationKind::OrphanComponent,
-                message: format!("component '{}' is not used by any base, project, or profile", comp.name),
+                kind: ViolationKind::OrphanComponent { brick: comp.name.clone() },
             });
         }
     }
@@ -237,11 +311,7 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
         let has_base_dep = project.deps.iter().any(|d| base_names.contains(d.as_str()));
         if !has_base_dep {
             violations.push(Violation {
-                kind: ViolationKind::ProjectMissingBase,
-                message: format!(
-                    "project '{}' has no base dependency — polylith projects must include at least one base",
-                    project.name
-                ),
+                kind: ViolationKind::ProjectMissingBase { project: project.name.clone() },
             });
         }
     }
@@ -249,14 +319,16 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
     // --- project has own workspace checks ---
     for project in &map.projects {
         if project.has_own_workspace {
+            let rel = project
+                .path
+                .strip_prefix(&map.root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
             violations.push(Violation {
-                kind: ViolationKind::ProjectHasOwnWorkspace { project: project.name.clone() },
-                message: format!(
-                    "project '{}' has its own [workspace] section — remove it from {}/Cargo.toml \
-                     and add the project to the root workspace members",
-                    project.name,
-                    project.path.strip_prefix(&map.root).unwrap_or(&project.path).display()
-                ),
+                kind: ViolationKind::ProjectHasOwnWorkspace {
+                    project: project.name.clone(),
+                    rel,
+                },
             });
         }
     }
@@ -285,13 +357,6 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
                         expected_name: pkg_name.clone(),
                         path: dep_path.to_string_lossy().into_owned(),
                     },
-                    message: format!(
-                        "project '{}': dep key '{}' does not match package name '{}' at {} \
-                         — use the correct package name as the dep key, or add `package = \"{}\"` as an alias",
-                        project.name, dep_key, pkg_name,
-                        dep_path.display(),
-                        pkg_name,
-                    ),
                 });
             }
         }
@@ -313,11 +378,10 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
     for (name, paths) in &by_name {
         if paths.len() > 1 {
             violations.push(Violation {
-                kind: ViolationKind::DuplicateName,
-                message: format!(
-                    "package name '{}' is used by {} bricks ({}) — give each a distinct name and declare `[package.metadata.polylith] interface = \"{}\"` on both",
-                    name, paths.len(), paths.join(", "), name
-                ),
+                kind: ViolationKind::DuplicateName {
+                    name: name.to_string(),
+                    paths: paths.iter().map(|s| s.to_string()).collect(),
+                },
             });
         }
     }
@@ -326,12 +390,7 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
     for comp in &map.components {
         if comp.interface.is_none() {
             violations.push(Violation {
-                kind: ViolationKind::MissingInterface,
-                message: format!(
-                    "component '{}' has no `[package.metadata.polylith] interface = \"...\"` \
-                     declaration — add interface metadata or run `cargo polylith edit` to set it",
-                    comp.name
-                ),
+                kind: ViolationKind::MissingInterface { brick: comp.name.clone() },
             });
         }
     }
@@ -349,13 +408,10 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
     for (iface, impls) in &by_interface {
         if impls.len() > 1 && !impls.contains(iface) {
             violations.push(Violation {
-                kind: ViolationKind::AmbiguousInterface,
-                message: format!(
-                    "interface '{}' has {} implementations ({}) but none has the default package name — every consumer must explicitly declare which implementation to use (path + package = \"...\")",
-                    iface,
-                    impls.len(),
-                    impls.join(", ")
-                ),
+                kind: ViolationKind::AmbiguousInterface {
+                    interface: iface.to_string(),
+                    impls: impls.iter().map(|s| s.to_string()).collect(),
+                },
             });
         }
     }
@@ -374,12 +430,11 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
                     super::model::BrickKind::Base => "base",
                 };
                 violations.push(Violation {
-                    kind: ViolationKind::NotInRootWorkspace,
-                    message: format!(
-                        "{kind_label} '{}' is not listed in root workspace members \
-                         — add '{rel}' to [workspace] members in Cargo.toml",
-                        brick.name
-                    ),
+                    kind: ViolationKind::NotInRootWorkspace {
+                        brick: brick.name.clone(),
+                        kind_label: kind_label.to_string(),
+                        rel,
+                    },
                 });
             }
         }
@@ -397,12 +452,8 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
                 violations.push(Violation {
                     kind: ViolationKind::ProjectNotInRootWorkspace {
                         project: project.name.clone(),
+                        rel,
                     },
-                    message: format!(
-                        "project '{}' is not listed in root workspace members \
-                         — add '{rel}' to [workspace] members in Cargo.toml",
-                        project.name
-                    ),
                 });
             }
         }
@@ -415,24 +466,15 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
 
         if !lib_rs.exists() {
             violations.push(Violation {
-                kind: ViolationKind::BaseMissingLibRs,
-                message: format!(
-                    "base '{}': src/lib.rs is missing — bases must expose a runtime API as a library function",
-                    base.name
-                ),
+                kind: ViolationKind::BaseMissingLibRs { brick: base.name.clone() },
             });
         }
 
         if main_rs.exists() {
             violations.push(Violation {
-                kind: ViolationKind::BaseHasMainRs,
-                message: format!(
-                    "base '{}': src/main.rs should be in a project, not a base — bases expose library functions like `run()` that projects call",
-                    base.name
-                ),
+                kind: ViolationKind::BaseHasMainRs { brick: base.name.clone() },
             });
         }
-
     }
 
     // --- project standalone dep drift checks (B & C) ---
@@ -456,10 +498,6 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
                         project_features: proj_info.features.clone(),
                         workspace_features: ws_info.features.clone(),
                     },
-                    message: format!(
-                        "project '{}': dep '{}' standalone build is missing workspace features {:?}",
-                        project.name, dep, missing,
-                    ),
                 });
             }
 
@@ -473,11 +511,6 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
                             project_version: pv.clone(),
                             workspace_version: wv.clone(),
                         },
-                        message: format!(
-                            "project '{}': dep '{}' version '{}' differs from workspace version '{}' \
-                             — standalone build may resolve a different version",
-                            project.name, dep, pv, wv,
-                        ),
                     });
                 }
             }
@@ -510,10 +543,6 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
                         brick: brick.name.clone(),
                         dep: dep_key.clone(),
                     },
-                    message: format!(
-                        "'{}' has a direct path dep on '{}' — consider using `{{ workspace = true }}` and the profile wiring diagram",
-                        brick.name, dep_key
-                    ),
                 });
             }
         }
@@ -534,10 +563,6 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
                     dep: dep_key.clone(),
                     package: pkg_name.clone(),
                 },
-                message: format!(
-                    "'{}': dep '{}' uses `package = \"{}\"` — this hardwires a specific implementation instead of coding against the interface",
-                    brick.name, dep_key, pkg_name
-                ),
             });
         }
     }
@@ -553,10 +578,6 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
                     dep: dep_key.clone(),
                     package: pkg_name.clone(),
                 },
-                message: format!(
-                    "project '{}': dep '{}' uses `package = \"{}\"` — this hardwires a specific implementation instead of coding against the interface",
-                    project.name, dep_key, pkg_name
-                ),
             });
         }
     }
@@ -567,21 +588,21 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
 /// Returns `true` for violation kinds that are warnings (exit 0), `false` for hard errors.
 pub fn is_warning_kind(k: &ViolationKind) -> bool {
     match k {
-        ViolationKind::OrphanComponent => true,
-        ViolationKind::WildcardReExport => true,
-        ViolationKind::BaseHasMainRs => true,
-        ViolationKind::ProjectMissingBase => true,
-        ViolationKind::NotInRootWorkspace => true,
-        ViolationKind::AmbiguousInterface => true,
-        ViolationKind::DuplicateName => true,
-        ViolationKind::MissingInterface => true,
+        ViolationKind::OrphanComponent { .. } => true,
+        ViolationKind::WildcardReExport { .. } => true,
+        ViolationKind::BaseHasMainRs { .. } => true,
+        ViolationKind::ProjectMissingBase { .. } => true,
+        ViolationKind::NotInRootWorkspace { .. } => true,
+        ViolationKind::AmbiguousInterface { .. } => true,
+        ViolationKind::DuplicateName { .. } => true,
+        ViolationKind::MissingInterface { .. } => true,
         ViolationKind::ProjectFeatureDrift { .. } => true,
         ViolationKind::ProjectVersionDrift { .. } => true,
         ViolationKind::ProjectNotInRootWorkspace { .. } => false,
         ViolationKind::ProjectHasOwnWorkspace { .. } => false,
-        ViolationKind::MissingLibRs => false,
-        ViolationKind::MissingImplFile => false,
-        ViolationKind::BaseMissingLibRs => false,
+        ViolationKind::MissingLibRs { .. } => false,
+        ViolationKind::MissingImplFile { .. } => false,
+        ViolationKind::BaseMissingLibRs { .. } => false,
         ViolationKind::DepKeyMismatch { .. } => false,
         ViolationKind::ProfileImplPathNotFound { .. } => false,
         ViolationKind::ProfileImplNotAComponent { .. } => false,
@@ -603,10 +624,6 @@ pub fn check_profile(profile: &super::model::Profile, map: &WorkspaceMap) -> Vec
                     interface: interface.clone(),
                     path: impl_path.clone(),
                 },
-                message: format!(
-                    "profile '{}': implementation path '{}' for interface '{}' does not exist",
-                    profile.name, impl_path, interface
-                ),
             });
             continue;
         }
@@ -622,10 +639,6 @@ pub fn check_profile(profile: &super::model::Profile, map: &WorkspaceMap) -> Vec
                     interface: interface.clone(),
                     path: impl_path.clone(),
                 },
-                message: format!(
-                    "profile '{}': '{}' for interface '{}' is not a known workspace component",
-                    profile.name, impl_path, interface
-                ),
             });
         }
     }
