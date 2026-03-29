@@ -157,9 +157,8 @@ pub fn write_profile_workspace(
                 .with_context(|| format!("creating symlink {}", link.display()))?;
                 #[cfg(not(unix))]
                 {
-                    // On non-Unix platforms symlinks require elevated privileges;
-                    // skip silently and let the user create them manually if needed.
                     let _ = link;
+                    eprintln!("warning: symlink creation is not supported on this platform — use WSL or Docker to run cargo-polylith on Windows");
                 }
             }
         }
