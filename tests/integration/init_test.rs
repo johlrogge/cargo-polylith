@@ -74,3 +74,38 @@ fn init_idempotent_does_not_fail() {
     run_init(&dir).success();
     run_init(&dir).success();
 }
+
+#[test]
+fn init_respects_workspace_root_flag() {
+    // The target workspace lives in a subdirectory; we run the command from a
+    // *different* directory and point --workspace-root at the target.
+    let target = TempDir::new().unwrap();
+    fs::write(
+        target.path().join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+
+    // Run from a completely separate temp dir to confirm cwd is NOT used.
+    let other = TempDir::new().unwrap();
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            target.path().to_str().unwrap(),
+            "init",
+        ])
+        .current_dir(other.path())
+        .assert()
+        .success();
+
+    assert!(
+        target.path().join("components").is_dir(),
+        "components/ should be created inside the --workspace-root directory"
+    );
+    assert!(
+        !other.path().join("components").exists(),
+        "components/ must NOT be created in cwd when --workspace-root is given"
+    );
+}
