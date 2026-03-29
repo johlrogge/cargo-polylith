@@ -346,7 +346,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                 .get("interface")
                 .and_then(|v| v.as_str())
                 .unwrap_or(comp_name);
-            match validate_brick_name(comp_name).and_then(|()| scaffold::create_component(root, comp_name, interface)) {
+            match validate_brick_name(comp_name).and_then(|()| Ok(scaffold::create_component(root, comp_name, interface)?)) {
                 Ok(()) => format!("created component '{comp_name}' with interface '{interface}'"),
                 Err(e) => format!("error: {e:#}"),
             }
@@ -354,7 +354,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
 
         "polylith_base_new" => {
             let base_name = arguments["name"].as_str().unwrap_or("");
-            match validate_brick_name(base_name).and_then(|()| scaffold::create_base(root, base_name)) {
+            match validate_brick_name(base_name).and_then(|()| Ok(scaffold::create_base(root, base_name)?)) {
                 Ok(()) => format!("created base '{base_name}'"),
                 Err(e) => format!("error: {e:#}"),
             }
@@ -362,7 +362,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
 
         "polylith_project_new" => {
             let project_name = arguments["name"].as_str().unwrap_or("");
-            match validate_brick_name(project_name).and_then(|()| scaffold::create_project(root, project_name)) {
+            match validate_brick_name(project_name).and_then(|()| Ok(scaffold::create_project(root, project_name)?)) {
                 Ok(()) => format!("created project '{project_name}'"),
                 Err(e) => format!("error: {e:#}"),
             }
@@ -389,7 +389,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
 
         "polylith_profile_new" => {
             let profile_name = arguments["name"].as_str().unwrap_or("");
-            match validate_brick_name(profile_name).and_then(|()| scaffold::create_profile(root, profile_name)) {
+            match validate_brick_name(profile_name).and_then(|()| Ok(scaffold::create_profile(root, profile_name)?)) {
                 Ok(()) => format!("created profile '{profile_name}'"),
                 Err(e) => format!("error: {e:#}"),
             }

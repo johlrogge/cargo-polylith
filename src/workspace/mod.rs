@@ -1,10 +1,15 @@
 pub mod check;
 pub mod discover;
+pub mod error;
 pub mod model;
 pub mod status;
 
 pub use check::{check_profile, run_checks};
 pub use discover::{build_workspace_map, discover_profiles, plan_root_demotion, read_polylith_toml, resolve_profile_workspace, resolve_root};
+// Re-exported so callers can match on specific workspace errors without
+// reaching into the internal `error` module.
+#[allow(unused_imports)]
+pub use error::WorkspaceError;
 pub use model::{PolylithToml, Profile, ResolvedProfileWorkspace, RootDemotionPlan, WorkspaceMap};
 pub use status::run_status;
 

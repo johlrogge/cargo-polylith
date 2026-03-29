@@ -338,7 +338,7 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
         }
     }
     for (iface, impls) in &by_interface {
-        if impls.len() > 1 && !impls.iter().any(|n| *n == *iface) {
+        if impls.len() > 1 && !impls.contains(iface) {
             violations.push(Violation {
                 kind: ViolationKind::AmbiguousInterface,
                 message: format!(

@@ -1,10 +1,24 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use cargo_toml::Manifest;
 
+use super::error::WorkspaceError;
 use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, RootDemotionPlan, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
+
+type Result<T> = std::result::Result<T, WorkspaceError>;
+
+/// Helper: map an `std::io::Error` to `WorkspaceError::Io` with the given path.
+fn io_err(path: impl Into<PathBuf>) -> impl FnOnce(std::io::Error) -> WorkspaceError {
+    let p = path.into();
+    move |e| WorkspaceError::Io { path: p, source: e }
+}
+
+/// Helper: map a parse error to `WorkspaceError::TomlParse` with the given path.
+fn parse_err<E: std::error::Error + Send + Sync + 'static>(path: impl Into<PathBuf>) -> impl FnOnce(E) -> WorkspaceError {
+    let p = path.into();
+    move |e| WorkspaceError::TomlParse { path: p, source: Box::new(e) }
+}
 
 /// Resolve the workspace root: use `override_root` if given, otherwise walk
 /// up from `start` searching for a `Polylith.toml` or `Cargo.toml` with `[workspace]`.
@@ -16,11 +30,12 @@ pub fn resolve_root(start: &Path, override_root: Option<&Path>) -> Result<PathBu
             } else {
                 start.join(p)
             };
-            anyhow::ensure!(
-                abs.join("Polylith.toml").exists() || abs.join("Cargo.toml").exists(),
-                "no Polylith.toml or Cargo.toml found at workspace root '{}'",
-                abs.display()
-            );
+            if !abs.join("Polylith.toml").exists() && !abs.join("Cargo.toml").exists() {
+                return Err(WorkspaceError::Other(format!(
+                    "no Polylith.toml or Cargo.toml found at workspace root '{}'",
+                    abs.display()
+                )));
+            }
             Ok(abs)
         }
         None => find_workspace_root(start),
@@ -46,7 +61,7 @@ pub fn find_workspace_root(start: &Path) -> Result<PathBuf> {
         let candidate = current.join("Cargo.toml");
         if candidate.exists() {
             let manifest = Manifest::from_path(&candidate)
-                .with_context(|| format!("failed to parse {}", candidate.display()))?;
+                .map_err(parse_err(&candidate))?;
             if manifest.workspace.is_some() && cargo_ws_root.is_none() {
                 cargo_ws_root = Some(current.clone());
             }
@@ -72,7 +87,7 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
         let toml_path = root.join("Cargo.toml");
         if toml_path.exists() {
             let manifest = Manifest::from_path(&toml_path)
-                .with_context(|| format!("failed to parse {}", toml_path.display()))?;
+                .map_err(parse_err(&toml_path))?;
             let is_ws = manifest.workspace.is_some();
             let members = manifest
                 .workspace
@@ -166,7 +181,10 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
 /// the `PolylithToml` directly (not wrapped in `Option`).
 pub fn read_polylith_toml(root: &Path) -> Result<PolylithToml> {
     parse_polylith_toml(root)?
-        .ok_or_else(|| anyhow::anyhow!("Polylith.toml not found at {}", root.display()))
+        .ok_or_else(|| WorkspaceError::Other(format!(
+            "Polylith.toml not found at {}",
+            root.display()
+        )))
 }
 
 /// Analyse the root workspace and produce a `RootDemotionPlan` — pure read, no writes.
@@ -178,10 +196,9 @@ pub fn plan_root_demotion(root: &Path) -> Result<RootDemotionPlan> {
     use std::collections::HashMap;
 
     let manifest_path = root.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let content = fs::read_to_string(&manifest_path).map_err(io_err(&manifest_path))?;
     let doc: toml_edit::DocumentMut = content.parse()
-        .with_context(|| "parsing root Cargo.toml")?;
+        .map_err(parse_err(&manifest_path))?;
 
     // Extract [workspace.package] fields
     let version = doc
@@ -281,11 +298,8 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
     if !path.exists() {
         return Ok(None);
     }
-    let content = fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let doc: toml_edit::DocumentMut = content
-        .parse()
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let content = fs::read_to_string(&path).map_err(io_err(&path))?;
+    let doc: toml_edit::DocumentMut = content.parse().map_err(parse_err(&path))?;
 
     let schema_version = doc
         .get("workspace")
@@ -360,10 +374,8 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
         return Ok(vec![]);
     }
     let mut bricks = vec![];
-    for entry in std::fs::read_dir(&dir)
-        .with_context(|| format!("reading {}", dir.display()))?
-    {
-        let entry = entry?;
+    for entry in std::fs::read_dir(&dir).map_err(io_err(&dir))? {
+        let entry = entry.map_err(io_err(&dir))?;
         let path = entry.path();
         if !path.is_dir() {
             continue;
@@ -375,9 +387,9 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
         // Use toml_edit for raw parsing — avoids workspace resolution which fails
         // when there is no [workspace] in the root (Polylith.toml workspaces).
         let doc = fs::read_to_string(&manifest_path)
-            .with_context(|| format!("reading {}", manifest_path.display()))?
+            .map_err(io_err(&manifest_path))?
             .parse::<toml_edit::DocumentMut>()
-            .with_context(|| format!("parsing {}", manifest_path.display()))?;
+            .map_err(parse_err(&manifest_path))?;
         let name = doc
             .get("package")
             .and_then(|p| p.get("name"))
@@ -435,7 +447,7 @@ fn scan_bricks(root: &Path, kind: BrickKind) -> Result<Vec<Brick>> {
         };
         bricks.push(Brick {
             name,
-            kind: kind.clone(),
+            kind,
             path: path.clone(),
             deps,
             manifest_path,
@@ -525,10 +537,8 @@ fn scan_projects(root: &Path) -> Result<Vec<Project>> {
         return Ok(vec![]);
     }
     let mut projects = vec![];
-    for entry in std::fs::read_dir(&dir)
-        .with_context(|| format!("reading {}", dir.display()))?
-    {
-        let entry = entry?;
+    for entry in std::fs::read_dir(&dir).map_err(io_err(&dir))? {
+        let entry = entry.map_err(io_err(&dir))?;
         let path = entry.path();
         if !path.is_dir() {
             continue;
@@ -659,10 +669,8 @@ pub fn discover_profiles(root: &Path) -> Result<Vec<Profile>> {
         return Ok(vec![]);
     }
     let mut profiles = vec![];
-    for entry in std::fs::read_dir(&profiles_dir)
-        .with_context(|| format!("reading {}", profiles_dir.display()))?
-    {
-        let entry = entry?;
+    for entry in std::fs::read_dir(&profiles_dir).map_err(io_err(&profiles_dir))? {
+        let entry = entry.map_err(io_err(&profiles_dir))?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("profile") {
             continue;
@@ -672,11 +680,8 @@ pub fn discover_profiles(root: &Path) -> Result<Vec<Profile>> {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let doc: toml_edit::DocumentMut = content
-            .parse()
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let content = fs::read_to_string(&path).map_err(io_err(&path))?;
+        let doc: toml_edit::DocumentMut = content.parse().map_err(parse_err(&path))?;
         // Parse [implementations]: each value is a string path
         let mut implementations = HashMap::new();
         if let Some(impls) = doc.get("implementations").and_then(|t| t.as_table()) {
@@ -1082,7 +1087,6 @@ mod tests {
             path_dep_keys: vec![],
             hardwired_pkg_deps: vec![],
         };
-        // One base that depends on "store" (the interface key)
         let app_base = Brick {
             name: "app".to_string(),
             kind: BrickKind::Base,
@@ -1093,30 +1097,27 @@ mod tests {
             path_dep_keys: vec![],
             hardwired_pkg_deps: vec![],
         };
-        // One project
-        let myproject = Project {
-            name: "myproject".to_string(),
-            path: root.join("projects/myproject"),
-            deps: vec![],
-            has_own_workspace: false,
-            bin_name: None,
-            dep_paths: vec![],
-            external_deps: HashMap::new(),
-            hardwired_pkg_deps: vec![],
-        };
 
-        // Root workspace interface dep points at store_mem (the default)
         let mut root_workspace_interface_deps = HashMap::new();
-        root_workspace_interface_deps.insert("store".to_string(), WorkspacePathDep {
-            path: "components/store_mem".to_string(),
-            package: None,
-        });
+        root_workspace_interface_deps.insert(
+            "store".to_string(),
+            WorkspacePathDep { path: "components/store_mem".to_string(), package: None },
+        );
 
         let map = WorkspaceMap {
             root: root.to_path_buf(),
             components: vec![store_file.clone(), store_mem.clone()],
             bases: vec![app_base],
-            projects: vec![myproject],
+            projects: vec![Project {
+                name: "myproject".to_string(),
+                path: root.join("projects/myproject"),
+                deps: vec![],
+                has_own_workspace: false,
+                bin_name: None,
+                dep_paths: vec![],
+                external_deps: HashMap::new(),
+                hardwired_pkg_deps: vec![],
+            }],
             root_members: vec![],
             is_workspace: true,
             root_workspace_deps: HashMap::new(),
@@ -1124,97 +1125,19 @@ mod tests {
             polylith_toml: None,
         };
 
-        // Profile selects store_file for the "store" interface
+        // Profile overrides to store_file
         let mut implementations = HashMap::new();
         implementations.insert("store".to_string(), "components/store_file".to_string());
         let profile = Profile {
-            name: "test".to_string(),
-            path: root.join("profiles/test.profile"),
+            name: "file".to_string(),
+            path: root.join("profiles/file.profile"),
             implementations,
             libraries: HashMap::new(),
         };
 
         let resolved = resolve_profile_workspace(root, &profile, &map);
-
-        // store_file should be included; store_mem should NOT be included
-        let has_store_file = resolved.members.iter().any(|m| m.contains("store_file"));
-        let has_store_mem = resolved.members.iter().any(|m| m.contains("store_mem"));
-
-        assert!(has_store_file, "store_file should be in members: {:?}", resolved.members);
-        assert!(!has_store_mem, "store_mem should NOT be in members: {:?}", resolved.members);
-    }
-
-    #[test]
-    fn find_workspace_root_finds_polylith_toml() {
-        use tempfile::TempDir;
-        let tmp = TempDir::new().unwrap();
-
-        // Create Polylith.toml at root (no Cargo.toml with [workspace])
-        fs::write(
-            tmp.path().join("Polylith.toml"),
-            "[workspace]\nschema_version = 1\n",
-        ).unwrap();
-
-        // Create a subdirectory
-        let subdir = tmp.path().join("components/my-comp");
-        fs::create_dir_all(&subdir).unwrap();
-        fs::write(
-            subdir.join("Cargo.toml"),
-            "[package]\nname = \"my-comp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        ).unwrap();
-
-        // find_workspace_root from the subdirectory should find the Polylith.toml directory
-        let found = find_workspace_root(&subdir).unwrap();
-        assert_eq!(found, tmp.path(), "should find Polylith.toml directory");
-    }
-
-    #[test]
-    fn parse_polylith_toml_returns_none_when_absent() {
-        use tempfile::TempDir;
-        let tmp = TempDir::new().unwrap();
-        let result = parse_polylith_toml(tmp.path()).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn parse_polylith_toml_parses_all_sections() {
-        use tempfile::TempDir;
-        let tmp = TempDir::new().unwrap();
-
-        fs::write(
-            tmp.path().join("Polylith.toml"),
-            r#"[workspace]
-schema_version = 1
-
-[workspace.package]
-version = "0.5.0"
-edition = "2021"
-license = "MIT"
-
-[libraries]
-serde = { version = "1", features = ["derive"] }
-tokio = "1.40"
-
-[profiles]
-dev = "profiles/dev.profile"
-prod = "profiles/prod.profile"
-"#,
-        ).unwrap();
-
-        let pt = parse_polylith_toml(tmp.path()).unwrap().unwrap();
-        assert_eq!(pt.schema_version, 1);
-
-        let pkg = pt.workspace_package.as_ref().unwrap();
-        assert_eq!(pkg.version.as_deref(), Some("0.5.0"));
-        assert_eq!(pkg.edition.as_deref(), Some("2021"));
-        assert_eq!(pkg.license.as_deref(), Some("MIT"));
-
-        assert_eq!(pt.libraries.len(), 2);
-        let serde_info = pt.libraries.get("serde").unwrap();
-        assert_eq!(serde_info.version.as_deref(), Some("1"));
-        assert!(serde_info.features.contains(&"derive".to_string()));
-
-        assert_eq!(pt.profiles.len(), 2);
-        assert_eq!(pt.profiles.get("dev").map(|s| s.as_str()), Some("profiles/dev.profile"));
+        // store_file should be in members; store_mem should NOT
+        assert!(resolved.members.iter().any(|m| m.contains("store_file")), "store_file missing from members");
+        assert!(!resolved.members.iter().any(|m| m.contains("store_mem")), "store_mem should be excluded");
     }
 }

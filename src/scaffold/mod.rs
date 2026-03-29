@@ -1,14 +1,30 @@
+pub mod error;
 pub mod templates;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use toml_edit::DocumentMut;
 
 use crate::workspace::{ResolvedProfileWorkspace, RootDemotionPlan};
 
 use templates::*;
+
+pub use error::ScaffoldError;
+
+type Result<T> = std::result::Result<T, ScaffoldError>;
+
+/// Helper: map an `std::io::Error` to `ScaffoldError::Io` with the given path.
+fn io_err(path: impl Into<PathBuf>) -> impl FnOnce(std::io::Error) -> ScaffoldError {
+    let p = path.into();
+    move |e| ScaffoldError::Io { path: p, source: e }
+}
+
+/// Helper: map a parse error to `ScaffoldError::TomlEdit` with the given path.
+fn toml_err<E: std::error::Error + Send + Sync + 'static>(path: impl Into<PathBuf>) -> impl FnOnce(E) -> ScaffoldError {
+    let p = path.into();
+    move |e| ScaffoldError::TomlEdit { path: p, source: Box::new(e) }
+}
 
 /// Create the three polylith top-level directories and `.cargo/config.toml`.
 pub fn init_workspace(root: &Path) -> Result<Vec<String>> {
@@ -18,17 +34,14 @@ pub fn init_workspace(root: &Path) -> Result<Vec<String>> {
         if p.exists() {
             warnings.push(format!("'{}' already exists, skipping", dir));
         } else {
-            fs::create_dir_all(&p)
-                .with_context(|| format!("creating {}", p.display()))?;
+            fs::create_dir_all(&p).map_err(io_err(&p))?;
         }
     }
     let cargo_dir = root.join(".cargo");
-    fs::create_dir_all(&cargo_dir)
-        .with_context(|| "creating .cargo directory")?;
+    fs::create_dir_all(&cargo_dir).map_err(io_err(&cargo_dir))?;
     let config_path = cargo_dir.join("config.toml");
     if !config_path.exists() {
-        fs::write(&config_path, cargo_config_toml())
-            .with_context(|| format!("writing {}", config_path.display()))?;
+        fs::write(&config_path, cargo_config_toml()).map_err(io_err(&config_path))?;
     }
     Ok(warnings)
 }
@@ -37,15 +50,15 @@ pub fn init_workspace(root: &Path) -> Result<Vec<String>> {
 pub fn create_component(root: &Path, name: &str, interface: &str) -> Result<()> {
     let dir = root.join("components").join(name);
     let src = dir.join("src");
-    fs::create_dir_all(&src)
-        .with_context(|| format!("creating {}", src.display()))?;
+    fs::create_dir_all(&src).map_err(io_err(&src))?;
 
-    fs::write(dir.join("Cargo.toml"), component_cargo_toml(name, interface))
-        .context("writing component Cargo.toml")?;
-    fs::write(src.join("lib.rs"), component_lib_rs(name))
-        .context("writing lib.rs")?;
-    fs::write(src.join(format!("{name}.rs")), component_impl_rs())
-        .context("writing impl file")?;
+    let cargo_toml_path = dir.join("Cargo.toml");
+    fs::write(&cargo_toml_path, component_cargo_toml(name, interface))
+        .map_err(io_err(&cargo_toml_path))?;
+    let lib_rs_path = src.join("lib.rs");
+    fs::write(&lib_rs_path, component_lib_rs(name)).map_err(io_err(&lib_rs_path))?;
+    let impl_path = src.join(format!("{name}.rs"));
+    fs::write(&impl_path, component_impl_rs()).map_err(io_err(&impl_path))?;
 
     add_workspace_member(root, &format!("components/{name}"))?;
     Ok(())
@@ -55,9 +68,8 @@ pub fn create_component(root: &Path, name: &str, interface: &str) -> Result<()> 
 /// `Cargo.toml`. Creates the metadata tables if they don't exist.
 pub fn write_interface_to_toml(component_path: &Path, interface: &str) -> Result<()> {
     let manifest_path = component_path.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let mut doc: DocumentMut = content.parse().context("parsing Cargo.toml")?;
+    let content = fs::read_to_string(&manifest_path).map_err(io_err(&manifest_path))?;
+    let mut doc: DocumentMut = content.parse().map_err(toml_err(&manifest_path))?;
     if doc["package"].get("metadata").is_none() {
         doc["package"]["metadata"] = toml_edit::table();
     }
@@ -65,8 +77,7 @@ pub fn write_interface_to_toml(component_path: &Path, interface: &str) -> Result
         doc["package"]["metadata"]["polylith"] = toml_edit::table();
     }
     doc["package"]["metadata"]["polylith"]["interface"] = toml_edit::value(interface);
-    fs::write(&manifest_path, doc.to_string())
-        .with_context(|| format!("writing {}", manifest_path.display()))?;
+    fs::write(&manifest_path, doc.to_string()).map_err(io_err(&manifest_path))?;
     Ok(())
 }
 
@@ -74,9 +85,8 @@ pub fn write_interface_to_toml(component_path: &Path, interface: &str) -> Result
 /// Creates the metadata tables if they don't exist.
 pub fn write_test_base_to_toml(base_path: &Path, test_base: bool) -> Result<()> {
     let manifest_path = base_path.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let mut doc: DocumentMut = content.parse().context("parsing Cargo.toml")?;
+    let content = fs::read_to_string(&manifest_path).map_err(io_err(&manifest_path))?;
+    let mut doc: DocumentMut = content.parse().map_err(toml_err(&manifest_path))?;
     if doc["package"].get("metadata").is_none() {
         doc["package"]["metadata"] = toml_edit::table();
     }
@@ -84,8 +94,7 @@ pub fn write_test_base_to_toml(base_path: &Path, test_base: bool) -> Result<()> 
         doc["package"]["metadata"]["polylith"] = toml_edit::table();
     }
     doc["package"]["metadata"]["polylith"]["test-base"] = toml_edit::value(test_base);
-    fs::write(&manifest_path, doc.to_string())
-        .with_context(|| format!("writing {}", manifest_path.display()))?;
+    fs::write(&manifest_path, doc.to_string()).map_err(io_err(&manifest_path))?;
     Ok(())
 }
 
@@ -93,15 +102,14 @@ pub fn write_test_base_to_toml(base_path: &Path, test_base: bool) -> Result<()> 
 pub fn create_base(root: &Path, name: &str) -> Result<()> {
     let dir = root.join("bases").join(name);
     let src = dir.join("src");
-    fs::create_dir_all(&src)
-        .with_context(|| format!("creating {}", src.display()))?;
+    fs::create_dir_all(&src).map_err(io_err(&src))?;
 
-    fs::write(dir.join("Cargo.toml"), base_cargo_toml(name))
-        .context("writing base Cargo.toml")?;
-    fs::write(src.join("lib.rs"), base_lib_rs())
-        .context("writing lib.rs")?;
-    fs::write(src.join("main.rs"), base_main_rs())
-        .context("writing main.rs")?;
+    let cargo_toml_path = dir.join("Cargo.toml");
+    fs::write(&cargo_toml_path, base_cargo_toml(name)).map_err(io_err(&cargo_toml_path))?;
+    let lib_rs_path = src.join("lib.rs");
+    fs::write(&lib_rs_path, base_lib_rs()).map_err(io_err(&lib_rs_path))?;
+    let main_rs_path = src.join("main.rs");
+    fs::write(&main_rs_path, base_main_rs()).map_err(io_err(&main_rs_path))?;
 
     add_workspace_member(root, &format!("bases/{name}"))?;
     Ok(())
@@ -111,13 +119,12 @@ pub fn create_base(root: &Path, name: &str) -> Result<()> {
 pub fn create_project(root: &Path, name: &str) -> Result<()> {
     let dir = root.join("projects").join(name);
     let src = dir.join("src");
-    fs::create_dir_all(&src)
-        .with_context(|| format!("creating {}", src.display()))?;
+    fs::create_dir_all(&src).map_err(io_err(&src))?;
 
-    fs::write(dir.join("Cargo.toml"), project_cargo_toml(name))
-        .context("writing project Cargo.toml")?;
-    fs::write(src.join("main.rs"), "fn main() {}\n")
-        .context("writing project src/main.rs")?;
+    let cargo_toml_path = dir.join("Cargo.toml");
+    fs::write(&cargo_toml_path, project_cargo_toml(name)).map_err(io_err(&cargo_toml_path))?;
+    let main_rs_path = src.join("main.rs");
+    fs::write(&main_rs_path, "fn main() {}\n").map_err(io_err(&main_rs_path))?;
 
     add_workspace_member(root, &format!("projects/{name}"))?;
     Ok(())
@@ -136,8 +143,7 @@ pub fn write_profile_workspace(
     resolved: &ResolvedProfileWorkspace,
 ) -> Result<std::path::PathBuf> {
     let profile_dir = root.join("profiles").join(&resolved.profile_name);
-    fs::create_dir_all(&profile_dir)
-        .with_context(|| format!("creating {}", profile_dir.display()))?;
+    fs::create_dir_all(&profile_dir).map_err(io_err(&profile_dir))?;
 
     // Create symlinks for each top-level brick directory that exists at root.
     // The symlink target is relative (../../<dir>) so it works regardless of
@@ -154,7 +160,7 @@ pub fn write_profile_workspace(
                     format!("../../{dir_name}"),
                     &link,
                 )
-                .with_context(|| format!("creating symlink {}", link.display()))?;
+                .map_err(io_err(&link))?;
                 #[cfg(not(unix))]
                 {
                     // On non-Unix platforms symlinks require elevated privileges;
@@ -228,8 +234,7 @@ pub fn write_profile_workspace(
         deps = deps_section,
     );
 
-    fs::write(&out_path, &content)
-        .with_context(|| format!("writing {}", out_path.display()))?;
+    fs::write(&out_path, &content).map_err(io_err(&out_path))?;
 
     Ok(out_path)
 }
@@ -238,14 +243,15 @@ pub fn write_profile_workspace(
 /// Initialises it with an empty `[implementations]` table.
 pub fn create_profile(root: &Path, name: &str) -> Result<()> {
     let profiles_dir = root.join("profiles");
-    fs::create_dir_all(&profiles_dir)
-        .with_context(|| format!("creating {}", profiles_dir.display()))?;
+    fs::create_dir_all(&profiles_dir).map_err(io_err(&profiles_dir))?;
     let profile_path = profiles_dir.join(format!("{name}.profile"));
     if profile_path.exists() {
-        anyhow::bail!("profile '{name}' already exists at {}", profile_path.display());
+        return Err(ScaffoldError::Other(format!(
+            "profile '{name}' already exists at {}",
+            profile_path.display()
+        )));
     }
-    fs::write(&profile_path, "[implementations]\n")
-        .with_context(|| format!("writing {}", profile_path.display()))?;
+    fs::write(&profile_path, "[implementations]\n").map_err(io_err(&profile_path))?;
     Ok(())
 }
 
@@ -260,20 +266,17 @@ pub fn add_profile_impl(
     impl_path: &str,
 ) -> Result<()> {
     let profiles_dir = root.join("profiles");
-    fs::create_dir_all(&profiles_dir)
-        .with_context(|| format!("creating {}", profiles_dir.display()))?;
+    fs::create_dir_all(&profiles_dir).map_err(io_err(&profiles_dir))?;
 
     let profile_path = profiles_dir.join(format!("{}.profile", profile_name));
 
     let content = if profile_path.exists() {
-        fs::read_to_string(&profile_path)
-            .with_context(|| format!("reading {}", profile_path.display()))?
+        fs::read_to_string(&profile_path).map_err(io_err(&profile_path))?
     } else {
         String::new()
     };
 
-    let mut doc: DocumentMut = content.parse()
-        .with_context(|| format!("parsing {}", profile_path.display()))?;
+    let mut doc: DocumentMut = content.parse().map_err(toml_err(&profile_path))?;
 
     // Ensure [implementations] table exists
     if doc.get("implementations").is_none() {
@@ -281,8 +284,7 @@ pub fn add_profile_impl(
     }
     doc["implementations"][interface] = toml_edit::value(impl_path);
 
-    fs::write(&profile_path, doc.to_string())
-        .with_context(|| format!("writing {}", profile_path.display()))?;
+    fs::write(&profile_path, doc.to_string()).map_err(io_err(&profile_path))?;
 
     Ok(())
 }
@@ -294,18 +296,16 @@ pub fn add_profile_impl(
 /// with an empty `[implementations]` table if it doesn't exist.
 pub fn write_profile_impl(profile_path: &Path, interface: &str, impl_path: &str) -> Result<()> {
     let content = if profile_path.exists() {
-        fs::read_to_string(profile_path)
-            .with_context(|| format!("reading {}", profile_path.display()))?
+        fs::read_to_string(profile_path).map_err(io_err(profile_path))?
     } else {
         "[implementations]\n".to_string()
     };
-    let mut doc: DocumentMut = content.parse().context("parsing profile file")?;
+    let mut doc: DocumentMut = content.parse().map_err(toml_err(profile_path))?;
     if doc.get("implementations").is_none() {
         doc["implementations"] = toml_edit::table();
     }
     doc["implementations"][interface] = toml_edit::value(impl_path);
-    fs::write(profile_path, doc.to_string())
-        .with_context(|| format!("writing {}", profile_path.display()))?;
+    fs::write(profile_path, doc.to_string()).map_err(io_err(profile_path))?;
     Ok(())
 }
 
@@ -314,8 +314,7 @@ pub fn write_profile_impl(profile_path: &Path, interface: &str, impl_path: &str)
 /// Creates the `profiles/` directory if it doesn't exist.
 pub fn create_dev_profile_from_deps(root: &Path, impls: &[(String, String)]) -> Result<()> {
     let profiles_dir = root.join("profiles");
-    fs::create_dir_all(&profiles_dir)
-        .with_context(|| format!("creating {}", profiles_dir.display()))?;
+    fs::create_dir_all(&profiles_dir).map_err(io_err(&profiles_dir))?;
 
     let profile_path = profiles_dir.join("dev.profile");
 
@@ -325,8 +324,7 @@ pub fn create_dev_profile_from_deps(root: &Path, impls: &[(String, String)]) -> 
         doc["implementations"][key] = toml_edit::value(path.as_str());
     }
 
-    fs::write(&profile_path, doc.to_string())
-        .with_context(|| format!("writing {}", profile_path.display()))?;
+    fs::write(&profile_path, doc.to_string()).map_err(io_err(&profile_path))?;
 
     Ok(())
 }
@@ -389,14 +387,12 @@ pub fn execute_root_demotion(root: &Path, plan: &RootDemotionPlan) -> Result<()>
         }
     }
 
-    fs::write(&polylith_toml_path, &polylith_content)
-        .with_context(|| format!("writing {}", polylith_toml_path.display()))?;
+    fs::write(&polylith_toml_path, &polylith_content).map_err(io_err(&polylith_toml_path))?;
 
     // Remove [workspace] from root Cargo.toml entirely (read then write back)
     let manifest_path = root.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let mut doc: DocumentMut = content.parse().context("parsing root Cargo.toml")?;
+    let content = fs::read_to_string(&manifest_path).map_err(io_err(&manifest_path))?;
+    let mut doc: DocumentMut = content.parse().map_err(toml_err(&manifest_path))?;
 
     doc.remove("workspace");
 
@@ -413,16 +409,15 @@ pub fn execute_root_demotion(root: &Path, plan: &RootDemotionPlan) -> Result<()>
         doc.insert("package", pkg);
         // Create an empty src/lib.rs so Cargo finds a valid target for this package.
         let src_dir = root.join("src");
-        fs::create_dir_all(&src_dir).with_context(|| format!("creating {}", src_dir.display()))?;
+        fs::create_dir_all(&src_dir).map_err(io_err(&src_dir))?;
         let lib_rs = src_dir.join("lib.rs");
         if !lib_rs.exists() {
             fs::write(&lib_rs, "// Polylith workspace root placeholder — do not edit.\n")
-                .with_context(|| format!("writing {}", lib_rs.display()))?;
+                .map_err(io_err(&lib_rs))?;
         }
     }
 
-    fs::write(&manifest_path, doc.to_string())
-        .with_context(|| format!("writing {}", manifest_path.display()))?;
+    fs::write(&manifest_path, doc.to_string()).map_err(io_err(&manifest_path))?;
 
     Ok(())
 }
@@ -471,10 +466,8 @@ fn strip_workspace_from_manifest(
     manifest_path: &Path,
     polylith_toml: &crate::workspace::PolylithToml,
 ) -> Result<bool> {
-    let content = fs::read_to_string(manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let mut doc: DocumentMut = content.parse()
-        .with_context(|| format!("parsing {}", manifest_path.display()))?;
+    let content = fs::read_to_string(manifest_path).map_err(io_err(manifest_path))?;
+    let mut doc: DocumentMut = content.parse().map_err(toml_err(manifest_path))?;
 
     let mut changed = false;
 
@@ -573,8 +566,7 @@ fn strip_workspace_from_manifest(
     }
 
     if changed {
-        fs::write(manifest_path, doc.to_string())
-            .with_context(|| format!("writing {}", manifest_path.display()))?;
+        fs::write(manifest_path, doc.to_string()).map_err(io_err(manifest_path))?;
     }
     Ok(changed)
 }
@@ -604,23 +596,20 @@ fn is_workspace_true_item(item: Option<&toml_edit::Item>) -> bool {
 /// using `toml_edit` to preserve existing comments and formatting.
 fn add_workspace_member(root: &Path, member: &str) -> Result<()> {
     let manifest_path = root.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let mut doc: DocumentMut = content
-        .parse()
-        .with_context(|| "parsing root Cargo.toml")?;
+    let content = fs::read_to_string(&manifest_path).map_err(io_err(&manifest_path))?;
+    let mut doc: DocumentMut = content.parse().map_err(toml_err(&manifest_path))?;
 
     let workspace = doc
         .entry("workspace")
         .or_insert(toml_edit::table())
         .as_table_mut()
-        .context("'workspace' is not a table")?;
+        .ok_or_else(|| ScaffoldError::Other("'workspace' is not a table".to_string()))?;
 
     let members = workspace
         .entry("members")
         .or_insert(toml_edit::array())
         .as_array_mut()
-        .context("'workspace.members' is not an array")?;
+        .ok_or_else(|| ScaffoldError::Other("'workspace.members' is not an array".to_string()))?;
 
     // Avoid duplicates
     let already_present = members
@@ -630,7 +619,6 @@ fn add_workspace_member(root: &Path, member: &str) -> Result<()> {
         members.push(member);
     }
 
-    fs::write(&manifest_path, doc.to_string())
-        .with_context(|| format!("writing {}", manifest_path.display()))?;
+    fs::write(&manifest_path, doc.to_string()).map_err(io_err(&manifest_path))?;
     Ok(())
 }
