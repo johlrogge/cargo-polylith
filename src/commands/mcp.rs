@@ -181,6 +181,11 @@ fn tools_list(id: Value, write: bool) -> Value {
                     }
                 }
             }),
+            json!({
+                "name": "polylith_migrate_package_meta",
+                "description": "Migrate [workspace.package] metadata from Polylith.toml to root Cargo.toml [package]",
+                "inputSchema": { "type": "object", "properties": {} }
+            }),
         ]);
     }
 
@@ -336,6 +341,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
         "polylith_component_new" | "polylith_base_new" | "polylith_project_new"
         | "polylith_component_update"
         | "polylith_profile_new" | "polylith_profile_add" | "polylith_base_update"
+        | "polylith_migrate_package_meta"
             if !write =>
         {
             Err(jsonrpc_error(
@@ -475,6 +481,13 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                         None => Err(jsonrpc_error(id.clone(), -32000, format!("base '{base_name}' not found in workspace"))),
                     }
                 }
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
+            }
+        }
+
+        "polylith_migrate_package_meta" => {
+            match scaffold::migrate_package_meta_to_cargo_toml(root) {
+                Ok(msg) => Ok(msg),
                 Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
