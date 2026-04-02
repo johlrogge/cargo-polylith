@@ -148,6 +148,8 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
     };
     // Parse Polylith.toml if present
     let polylith_toml = parse_polylith_toml(root)?;
+    // Read package metadata from root Cargo.toml [package]
+    let root_package_meta = read_root_package_meta(root)?;
 
     // When Polylith.toml is present, use its [libraries] as root_workspace_deps (if non-empty)
     let root_workspace_deps = if let Some(pt) = &polylith_toml {
@@ -172,6 +174,7 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
         root_workspace_deps,
         root_workspace_interface_deps,
         polylith_toml,
+        root_package_meta,
         component_by_name: std::collections::HashMap::new(),
         component_by_interface: std::collections::HashMap::new(),
         base_by_name: std::collections::HashMap::new(),
@@ -186,6 +189,41 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
         .map(|(i, b)| (b.name.clone(), i))
         .collect();
     Ok(map)
+}
+
+/// Read package metadata from root `Cargo.toml` `[package]` section.
+pub fn read_root_package_meta(root: &Path) -> Result<Option<WorkspacePackageMeta>> {
+    let toml_path = root.join("Cargo.toml");
+    if !toml_path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&toml_path).map_err(io_err(&toml_path))?;
+    let doc: toml_edit::DocumentMut = content.parse().map_err(parse_err(&toml_path))?;
+
+    let pkg = match doc.get("package") {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let version = pkg.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let edition = pkg.get("edition").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let authors: Vec<String> = pkg
+        .get("authors")
+        .and_then(|v| v.as_value())
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    let license = pkg.get("license").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let repository = pkg.get("repository").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    let has_meta = version.is_some() || edition.is_some() || !authors.is_empty()
+        || license.is_some() || repository.is_some();
+
+    if has_meta {
+        Ok(Some(WorkspacePackageMeta { version, edition, authors, license, repository }))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Read `Polylith.toml` from the given root directory, returning an error if not present.
@@ -352,27 +390,6 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
         .map(|n| n as u32)
         .unwrap_or(1);
 
-    let workspace_package = doc
-        .get("workspace")
-        .and_then(|w| w.get("package"))
-        .map(|pkg| WorkspacePackageMeta {
-            version: pkg.get("version").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            edition: pkg.get("edition").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            authors: pkg
-                .get("authors")
-                .and_then(|v| v.as_value())
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .collect()
-                })
-                .unwrap_or_default(),
-            license: pkg.get("license").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            repository: pkg.get("repository").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        });
-
     let mut libraries = std::collections::HashMap::new();
     if let Some(libs) = doc.get("libraries").and_then(|t| t.as_table()) {
         for (k, v) in libs.iter() {
@@ -398,7 +415,6 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
 
     Ok(Some(PolylithToml {
         schema_version,
-        workspace_package,
         libraries,
         profiles,
     }))
@@ -956,10 +972,7 @@ pub fn resolve_profile_workspace(
         }
     }
 
-    let workspace_package = map
-        .polylith_toml
-        .as_ref()
-        .and_then(|pt| pt.workspace_package.clone());
+    let workspace_package = map.root_package_meta.clone();
 
     ResolvedProfileWorkspace {
         profile_name: profile.name.clone(),
@@ -1154,6 +1167,7 @@ mod tests {
             root_workspace_deps: HashMap::new(),
             root_workspace_interface_deps,
             polylith_toml: None,
+            root_package_meta: None,
             component_by_name: HashMap::new(),
             component_by_interface: HashMap::new(),
             base_by_name: HashMap::new(),

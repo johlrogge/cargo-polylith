@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use crate::commands::validate::validate_brick_name;
 use crate::commands::CommandError;
 use crate::output::table;
-use crate::workspace::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, resolve_profile_workspace, resolve_root};
+use crate::workspace::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, read_root_package_meta, resolve_profile_workspace, resolve_root};
 
 pub fn list(json: bool, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -119,7 +119,8 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
 
     // Strip { workspace = true } from all brick Cargo.tomls
     let polylith_toml = crate::workspace::read_polylith_toml(&root)?;
-    let stripped_count = crate::scaffold::strip_workspace_inheritance(&root, &polylith_toml, &impl_pairs)?;
+    let root_pkg_meta = read_root_package_meta(&root)?;
+    let stripped_count = crate::scaffold::strip_workspace_inheritance(&root, &polylith_toml, &impl_pairs, root_pkg_meta.as_ref())?;
     if stripped_count > 0 {
         eprintln!("Stripped workspace inheritance from {} brick(s)", stripped_count);
     }

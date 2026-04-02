@@ -441,26 +441,6 @@ pub fn execute_root_demotion(root: &Path, plan: &RootDemotionPlan) -> Result<()>
     polylith_content.push_str("[workspace]\n");
     polylith_content.push_str("schema_version = 1\n");
 
-    if let Some(pkg) = &plan.workspace_package {
-        polylith_content.push_str("\n[workspace.package]\n");
-        if let Some(v) = &pkg.version {
-            polylith_content.push_str(&format!("version = \"{}\"\n", v));
-        }
-        if let Some(e) = &pkg.edition {
-            polylith_content.push_str(&format!("edition = \"{}\"\n", e));
-        }
-        if !pkg.authors.is_empty() {
-            let authors_list = pkg.authors.iter().map(|a| format!("\"{}\"", a)).collect::<Vec<_>>().join(", ");
-            polylith_content.push_str(&format!("authors = [{}]\n", authors_list));
-        }
-        if let Some(l) = &pkg.license {
-            polylith_content.push_str(&format!("license = \"{}\"\n", l));
-        }
-        if let Some(r) = &pkg.repository {
-            polylith_content.push_str(&format!("repository = \"{}\"\n", r));
-        }
-    }
-
     if !plan.libraries.is_empty() {
         polylith_content.push_str("\n[libraries]\n");
         let mut sorted_keys: Vec<&String> = plan.libraries.keys().collect();
@@ -498,9 +478,28 @@ pub fn execute_root_demotion(root: &Path, plan: &RootDemotionPlan) -> Result<()>
     if doc.get("package").is_none() {
         let mut pkg = toml_edit::table();
         pkg["name"] = toml_edit::value("workspace-root");
-        pkg["version"] = toml_edit::value("0.0.0");
-        pkg["edition"] = toml_edit::value("2021");
+        pkg["version"] = toml_edit::value(
+            plan.workspace_package.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("0.0.0"),
+        );
+        pkg["edition"] = toml_edit::value(
+            plan.workspace_package.as_ref().and_then(|p| p.edition.as_deref()).unwrap_or("2021"),
+        );
         pkg["publish"] = toml_edit::value(false);
+        if let Some(meta) = &plan.workspace_package {
+            if !meta.authors.is_empty() {
+                let mut arr = toml_edit::Array::new();
+                for author in &meta.authors {
+                    arr.push(author.as_str());
+                }
+                pkg["authors"] = toml_edit::value(arr);
+            }
+            if let Some(l) = &meta.license {
+                pkg["license"] = toml_edit::value(l.as_str());
+            }
+            if let Some(r) = &meta.repository {
+                pkg["repository"] = toml_edit::value(r.as_str());
+            }
+        }
         doc.insert("package", pkg);
         // Create an empty src/lib.rs so Cargo finds a valid target for this package.
         let src_dir = root.join("src");
@@ -510,6 +509,38 @@ pub fn execute_root_demotion(root: &Path, plan: &RootDemotionPlan) -> Result<()>
             fs::write(&lib_rs, "// Polylith workspace root placeholder — do not edit.\n")
                 .map_err(io_err(&lib_rs))?;
         }
+    } else if let Some(meta) = &plan.workspace_package {
+        // [package] already exists — merge metadata fields (don't overwrite existing)
+        let pkg = doc["package"].as_table_mut().ok_or_else(|| ScaffoldError::Other("[package] is not a table".to_string()))?;
+        if pkg.get("version").is_none() {
+            if let Some(v) = &meta.version {
+                pkg["version"] = toml_edit::value(v.as_str());
+            }
+        }
+        if pkg.get("edition").is_none() {
+            if let Some(e) = &meta.edition {
+                pkg["edition"] = toml_edit::value(e.as_str());
+            }
+        }
+        if pkg.get("authors").is_none() && !meta.authors.is_empty() {
+            let mut arr = toml_edit::Array::new();
+            for author in &meta.authors {
+                arr.push(author.as_str());
+            }
+            pkg["authors"] = toml_edit::value(arr);
+        }
+        if pkg.get("license").is_none() {
+            if let Some(l) = &meta.license {
+                pkg["license"] = toml_edit::value(l.as_str());
+            }
+        }
+        if pkg.get("repository").is_none() {
+            if let Some(r) = &meta.repository {
+                pkg["repository"] = toml_edit::value(r.as_str());
+            }
+        }
+        // Always ensure publish = false
+        pkg["publish"] = toml_edit::value(false);
     }
 
     fs::write(&manifest_path, doc.to_string()).map_err(io_err(&manifest_path))?;
@@ -527,6 +558,7 @@ pub fn strip_workspace_inheritance(
     root: &Path,
     polylith_toml: &crate::workspace::PolylithToml,
     _interface_impls: &[(String, String)],
+    workspace_package: Option<&crate::workspace::WorkspacePackageMeta>,
 ) -> Result<usize> {
     let mut count = 0;
     for kind_dir in &["components", "bases", "projects"] {
@@ -543,7 +575,7 @@ pub fn strip_workspace_inheritance(
             if !manifest_path.exists() {
                 continue;
             }
-            let changed = strip_workspace_from_manifest(&manifest_path, polylith_toml)?;
+            let changed = strip_workspace_from_manifest(&manifest_path, polylith_toml, workspace_package)?;
             if changed {
                 count += 1;
             }
@@ -560,6 +592,7 @@ pub fn strip_workspace_inheritance(
 fn strip_workspace_from_manifest(
     manifest_path: &Path,
     polylith_toml: &crate::workspace::PolylithToml,
+    workspace_package: Option<&crate::workspace::WorkspacePackageMeta>,
 ) -> Result<bool> {
     let content = fs::read_to_string(manifest_path).map_err(io_err(manifest_path))?;
     let mut doc: DocumentMut = content.parse().map_err(toml_err(manifest_path))?;
@@ -567,7 +600,7 @@ fn strip_workspace_from_manifest(
     let mut changed = false;
 
     // -- Package metadata fields --
-    let pkg_meta = polylith_toml.workspace_package.as_ref();
+    let pkg_meta = workspace_package;
 
     // We process fields: version, edition, authors, license, repository
     // We need to check if they are `{ workspace = true }` or dotted-key form.
@@ -664,6 +697,123 @@ fn strip_workspace_from_manifest(
         fs::write(manifest_path, doc.to_string()).map_err(io_err(manifest_path))?;
     }
     Ok(changed)
+}
+
+/// Migrate `[workspace.package]` metadata from `Polylith.toml` to root `Cargo.toml` `[package]`.
+///
+/// - Reads `Polylith.toml` looking for a `[workspace][package]` section.
+/// - If none exists, returns a "nothing to migrate" message.
+/// - Otherwise, merges fields into root `Cargo.toml` `[package]` (does not overwrite existing).
+/// - Removes `[workspace][package]` from `Polylith.toml`.
+/// - Writes both files back.
+/// - Returns a summary of migrated fields.
+pub fn migrate_package_meta_to_cargo_toml(root: &Path) -> Result<String> {
+    let polylith_toml_path = root.join("Polylith.toml");
+    if !polylith_toml_path.exists() {
+        return Err(ScaffoldError::Other("Polylith.toml not found".to_string()));
+    }
+
+    let poly_content = fs::read_to_string(&polylith_toml_path).map_err(io_err(&polylith_toml_path))?;
+    let mut poly_doc: DocumentMut = poly_content.parse().map_err(toml_err(&polylith_toml_path))?;
+
+    // Check for [workspace.package]
+    let has_ws_pkg = poly_doc
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .is_some();
+
+    if !has_ws_pkg {
+        return Ok("nothing to migrate: no [workspace.package] in Polylith.toml".to_string());
+    }
+
+    // Extract fields
+    let version = poly_doc
+        .get("workspace").and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let edition = poly_doc
+        .get("workspace").and_then(|w| w.get("package"))
+        .and_then(|p| p.get("edition")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let authors: Vec<String> = poly_doc
+        .get("workspace").and_then(|w| w.get("package"))
+        .and_then(|p| p.get("authors"))
+        .and_then(|v| v.as_value()).and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    let license = poly_doc
+        .get("workspace").and_then(|w| w.get("package"))
+        .and_then(|p| p.get("license")).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let repository = poly_doc
+        .get("workspace").and_then(|w| w.get("package"))
+        .and_then(|p| p.get("repository")).and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    // Read root Cargo.toml
+    let cargo_toml_path = root.join("Cargo.toml");
+    if !cargo_toml_path.exists() {
+        return Err(ScaffoldError::Other("root Cargo.toml not found".to_string()));
+    }
+    let cargo_content = fs::read_to_string(&cargo_toml_path).map_err(io_err(&cargo_toml_path))?;
+    let mut cargo_doc: DocumentMut = cargo_content.parse().map_err(toml_err(&cargo_toml_path))?;
+
+    if cargo_doc.get("package").is_none() {
+        return Err(ScaffoldError::Other("root Cargo.toml has no [package] section".to_string()));
+    }
+
+    // Merge fields (don't overwrite existing)
+    let mut migrated = vec![];
+    {
+        let pkg = cargo_doc["package"].as_table_mut()
+            .ok_or_else(|| ScaffoldError::Other("[package] is not a table".to_string()))?;
+        if pkg.get("version").is_none() {
+            if let Some(v) = &version {
+                pkg["version"] = toml_edit::value(v.as_str());
+                migrated.push(format!("version = \"{}\"", v));
+            }
+        }
+        if pkg.get("edition").is_none() {
+            if let Some(e) = &edition {
+                pkg["edition"] = toml_edit::value(e.as_str());
+                migrated.push(format!("edition = \"{}\"", e));
+            }
+        }
+        if pkg.get("authors").is_none() && !authors.is_empty() {
+            let mut arr = toml_edit::Array::new();
+            for author in &authors {
+                arr.push(author.as_str());
+            }
+            pkg["authors"] = toml_edit::value(arr);
+            migrated.push(format!("authors = [{}]", authors.iter().map(|a| format!("\"{}\"", a)).collect::<Vec<_>>().join(", ")));
+        }
+        if pkg.get("license").is_none() {
+            if let Some(l) = &license {
+                pkg["license"] = toml_edit::value(l.as_str());
+                migrated.push(format!("license = \"{}\"", l));
+            }
+        }
+        if pkg.get("repository").is_none() {
+            if let Some(r) = &repository {
+                pkg["repository"] = toml_edit::value(r.as_str());
+                migrated.push(format!("repository = \"{}\"", r));
+            }
+        }
+    }
+
+    // Remove [workspace.package] from Polylith.toml
+    if let Some(ws) = poly_doc.get_mut("workspace").and_then(|w| w.as_table_mut()) {
+        ws.remove("package");
+    }
+
+    // Write both files back
+    fs::write(&cargo_toml_path, cargo_doc.to_string()).map_err(io_err(&cargo_toml_path))?;
+    fs::write(&polylith_toml_path, poly_doc.to_string()).map_err(io_err(&polylith_toml_path))?;
+
+    if migrated.is_empty() {
+        Ok("Polylith.toml [workspace.package] removed; all fields already present in root Cargo.toml [package]".to_string())
+    } else {
+        Ok(format!(
+            "Migrated from Polylith.toml [workspace.package] to root Cargo.toml [package]: {}",
+            migrated.join(", ")
+        ))
+    }
 }
 
 use crate::toml_utils::toml_bool;

@@ -5,12 +5,12 @@ pub mod model;
 pub mod status;
 
 pub use check::{check_profile, run_checks};
-pub use discover::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, read_polylith_toml, resolve_profile_workspace, resolve_root};
+pub use discover::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, read_polylith_toml, read_root_package_meta, resolve_profile_workspace, resolve_root};
 // Re-exported so callers can match on specific workspace errors without
 // reaching into the internal `error` module.
 #[allow(unused_imports)]
 pub use error::WorkspaceError;
-pub use model::{PolylithToml, Profile, ResolvedProfileWorkspace, RootDemotionPlan, WorkspaceMap};
+pub use model::{PolylithToml, Profile, ResolvedProfileWorkspace, RootDemotionPlan, WorkspaceMap, WorkspacePackageMeta};
 pub use status::run_status;
 
 /// BFS transitive closure over a dependency graph.

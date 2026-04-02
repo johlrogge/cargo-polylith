@@ -584,19 +584,25 @@ serde = { version = "1", features = ["derive"] }
 
     let polylith_content = fs::read_to_string(&polylith_toml_path).unwrap();
     assert!(polylith_content.contains("[workspace]"), "should have [workspace] section");
-    assert!(polylith_content.contains("[workspace.package]"), "should have [workspace.package] section");
-    assert!(polylith_content.contains("version = \"0.1.0\""), "should have version");
-    assert!(polylith_content.contains("edition = \"2021\""), "should have edition");
+    assert!(!polylith_content.contains("[workspace.package]"), "should NOT have [workspace.package] section — metadata moved to root Cargo.toml");
     assert!(polylith_content.contains("[libraries]"), "should have [libraries] section");
     assert!(polylith_content.contains("serde"), "should have serde library");
     assert!(polylith_content.contains("[profiles]"), "should have [profiles] section");
     assert!(polylith_content.contains("dev"), "should have dev profile entry");
 
-    // Root Cargo.toml should no longer contain [workspace
+    // Root Cargo.toml should no longer contain [workspace] but should have [package] with metadata
     let root_content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
     assert!(
         !root_content.contains("[workspace"),
         "root Cargo.toml should have no [workspace] section after migration.\ncontent:\n{root_content}"
+    );
+    assert!(
+        root_content.contains("version = \"0.1.0\""),
+        "root Cargo.toml [package] should have version from workspace.package.\ncontent:\n{root_content}"
+    );
+    assert!(
+        root_content.contains("edition = \"2021\""),
+        "root Cargo.toml [package] should have edition from workspace.package.\ncontent:\n{root_content}"
     );
 }
 
