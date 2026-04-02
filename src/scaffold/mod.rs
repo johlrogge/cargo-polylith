@@ -832,6 +832,13 @@ fn add_workspace_member(root: &Path, member: &str) -> Result<()> {
     let content = fs::read_to_string(&manifest_path).map_err(io_err(&manifest_path))?;
     let mut doc: DocumentMut = content.parse().map_err(toml_err(&manifest_path))?;
 
+    // In a pure Polylith workspace (Polylith.toml present, no [workspace] section in root
+    // Cargo.toml), bricks are managed by profiles — not by the root workspace members list.
+    // Skip silently to avoid creating a spurious [workspace] section.
+    if root.join("Polylith.toml").exists() && doc.get("workspace").is_none() {
+        return Ok(());
+    }
+
     let workspace = doc
         .entry("workspace")
         .or_insert(toml_edit::table())
