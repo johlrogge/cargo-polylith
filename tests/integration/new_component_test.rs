@@ -3,6 +3,27 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 
+/// Set up a pure Polylith.toml workspace (root Cargo.toml has only [package], no [workspace]).
+/// This mirrors a workspace after `cargo polylith migrate` has run.
+#[allow(dead_code)]
+fn init_polylith_toml_workspace(dir: &TempDir) {
+    fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"root\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("Polylith.toml"),
+        "[workspace]\nname = \"my-ws\"\n\n[package]\nauthor = \"test\"\n",
+    )
+    .unwrap();
+    // Create minimal directory structure expected by scaffold
+    fs::create_dir_all(dir.path().join("components")).unwrap();
+    fs::create_dir_all(dir.path().join("bases")).unwrap();
+    fs::create_dir_all(dir.path().join("projects")).unwrap();
+    fs::create_dir_all(dir.path().join("development")).unwrap();
+}
+
 fn cargo_polylith() -> Command {
     Command::cargo_bin("cargo-polylith").unwrap()
 }
@@ -268,5 +289,62 @@ fn project_new_creates_bin_crate_without_workspace() {
     assert!(
         content.contains("[[bin]]"),
         "project Cargo.toml must contain [[bin]] section: {content}"
+    );
+}
+
+// ── Polylith.toml workspace (no [workspace] in root Cargo.toml) ───────────────
+
+#[test]
+fn component_new_succeeds_in_polylith_toml_workspace() {
+    // Regression test for: `cargo polylith component new` fails with
+    // "'workspace.members' is not an array" in Polylith.toml workspaces
+    // where root Cargo.toml has no [workspace] section.
+    let dir = TempDir::new().unwrap();
+    init_polylith_toml_workspace(&dir);
+
+    cargo_polylith()
+        .args(["polylith", "component", "new", "my_comp"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+}
+
+#[test]
+fn component_new_does_not_corrupt_root_cargo_toml_in_polylith_toml_workspace() {
+    let dir = TempDir::new().unwrap();
+    init_polylith_toml_workspace(&dir);
+
+    cargo_polylith()
+        .args(["polylith", "component", "new", "my_comp"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let root_toml = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(
+        !root_toml.contains("[workspace]"),
+        "root Cargo.toml must not gain a [workspace] section in a Polylith.toml workspace: {root_toml}"
+    );
+    assert!(
+        !root_toml.contains("components/my_comp"),
+        "root Cargo.toml must not list members in a Polylith.toml workspace: {root_toml}"
+    );
+}
+
+#[test]
+fn base_new_succeeds_in_polylith_toml_workspace() {
+    let dir = TempDir::new().unwrap();
+    init_polylith_toml_workspace(&dir);
+
+    cargo_polylith()
+        .args(["polylith", "base", "new", "my_base"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+
+    let root_toml = fs::read_to_string(dir.path().join("Cargo.toml")).unwrap();
+    assert!(
+        !root_toml.contains("[workspace]"),
+        "root Cargo.toml must not gain a [workspace] section: {root_toml}"
     );
 }
