@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-/// Shared package metadata from `[workspace.package]` in `Polylith.toml`.
+/// Shared package metadata from root `Cargo.toml` `[package]`.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspacePackageMeta {
     pub version: Option<String>,
@@ -17,7 +17,6 @@ pub struct WorkspacePackageMeta {
 #[derive(Debug, Clone, Serialize)]
 pub struct PolylithToml {
     pub schema_version: u32,
-    pub workspace_package: Option<WorkspacePackageMeta>,
     pub libraries: HashMap<String, ExternalDepInfo>,
     /// Maps profile name → relative path to `.profile` file.
     pub profiles: HashMap<String, String>,
@@ -125,13 +124,24 @@ pub struct WorkspaceMap {
     pub root_workspace_interface_deps: HashMap<String, WorkspacePathDep>,
     /// Parsed `Polylith.toml` if present at root, `None` for legacy workspaces.
     pub polylith_toml: Option<PolylithToml>,
+    /// Package metadata read from root `Cargo.toml` `[package]`, if present.
+    pub root_package_meta: Option<WorkspacePackageMeta>,
+    /// Index: component name → index into `components`. Derived from `components`.
+    #[serde(skip)]
+    pub component_by_name: HashMap<String, usize>,
+    /// Index: component interface name → index into `components`. Derived from `components`.
+    #[serde(skip)]
+    pub component_by_interface: HashMap<String, usize>,
+    /// Index: base name → index into `bases`. Derived from `bases`.
+    #[serde(skip)]
+    pub base_by_name: HashMap<String, usize>,
 }
 
 /// Plan produced by analysing the root workspace before migration.
 /// Computed by `workspace::plan_root_demotion`; consumed by `scaffold::execute_root_demotion`.
 #[derive(Debug, Clone)]
 pub struct RootDemotionPlan {
-    /// Extracted [workspace.package] metadata for Polylith.toml
+    /// Transient carrier: extracted from old [workspace.package], written into root Cargo.toml [package]
     pub workspace_package: Option<WorkspacePackageMeta>,
     /// External (non-path) library deps for Polylith.toml [libraries].
     /// Each entry has `raw` populated for verbatim TOML rendering.
@@ -153,6 +163,6 @@ pub struct ResolvedProfileWorkspace {
     pub interface_dep_lines: Vec<String>,
     /// Library dep lines, fully rendered for [workspace.dependencies].
     pub library_dep_lines: Vec<String>,
-    /// Shared package metadata from `Polylith.toml [workspace.package]`, if present.
+    /// Shared package metadata from root `Cargo.toml` `[package]`, if present.
     pub workspace_package: Option<WorkspacePackageMeta>,
 }

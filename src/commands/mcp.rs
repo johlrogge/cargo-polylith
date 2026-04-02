@@ -181,6 +181,11 @@ fn tools_list(id: Value, write: bool) -> Value {
                     }
                 }
             }),
+            json!({
+                "name": "polylith_migrate_package_meta",
+                "description": "Migrate [workspace.package] metadata from Polylith.toml to root Cargo.toml [package]",
+                "inputSchema": { "type": "object", "properties": {} }
+            }),
         ]);
     }
 
@@ -192,7 +197,9 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
     let name = params["name"].as_str().unwrap_or("");
     let arguments = &params["arguments"];
 
-    let result_text = match name {
+    // Each arm returns Ok(text) for success or Err(json_rpc_error_value) for errors.
+    // Err values are fully-formed JSON-RPC error responses ready to return.
+    let result: Result<String, Value> = match name {
         // ── read tools ──────────────────────────────────────────────────────
         "polylith_info" => match build_workspace_map(root) {
             Ok(map) => {
@@ -229,9 +236,9 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                         deps: &p.deps,
                     }).collect(),
                 };
-                serde_json::to_string_pretty(&out).unwrap_or_else(|e| e.to_string())
+                Ok(serde_json::to_string_pretty(&out).unwrap_or_else(|e| e.to_string()))
             }
-            Err(e) => format!("error: {e:#}"),
+            Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
         },
 
         "polylith_deps" => {
@@ -274,12 +281,12 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                         })
                         .collect();
 
-                    serde_json::to_string_pretty(
+                    Ok(serde_json::to_string_pretty(
                         &json!({ "bases": bases, "projects": projects }),
                     )
-                    .unwrap_or_else(|e| e.to_string())
+                    .unwrap_or_else(|e| e.to_string()))
                 }
-                Err(e) => format!("error: {e:#}"),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
 
@@ -287,10 +294,10 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
             Ok(map) => {
                 let profiles = discover_profiles(root).unwrap_or_default();
                 let violations = run_checks(&map, &profiles);
-                serde_json::to_string_pretty(&json!({ "violations": violations }))
-                    .unwrap_or_else(|e| e.to_string())
+                Ok(serde_json::to_string_pretty(&json!({ "violations": violations }))
+                    .unwrap_or_else(|e| e.to_string()))
             }
-            Err(e) => format!("error: {e:#}"),
+            Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
         },
 
         "polylith_status" => match build_workspace_map(root) {
@@ -319,130 +326,281 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
                         .collect(),
                     suggestions: &report.suggestions,
                 };
-                serde_json::to_string_pretty(&out).unwrap_or_else(|e| e.to_string())
+                Ok(serde_json::to_string_pretty(&out).unwrap_or_else(|e| e.to_string()))
             }
-            Err(e) => format!("error: {e:#}"),
+            Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
         },
 
         // ── read profile tool ───────────────────────────────────────────────
         "polylith_profile_list" => match discover_profiles(root) {
-            Ok(profiles) => serde_json::to_string_pretty(&profiles).unwrap_or_else(|e| e.to_string()),
-            Err(e) => format!("error: {e:#}"),
+            Ok(profiles) => Ok(serde_json::to_string_pretty(&profiles).unwrap_or_else(|e| e.to_string())),
+            Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
         },
 
         // ── write tools ─────────────────────────────────────────────────────
         "polylith_component_new" | "polylith_base_new" | "polylith_project_new"
         | "polylith_component_update"
         | "polylith_profile_new" | "polylith_profile_add" | "polylith_base_update"
+        | "polylith_migrate_package_meta"
             if !write =>
         {
-            "write tools disabled — restart the MCP server with --write to enable scaffolding"
-                .to_string()
+            Err(jsonrpc_error(
+                id.clone(),
+                -32601,
+                "write tools disabled — restart the MCP server with --write to enable scaffolding".to_string(),
+            ))
         }
 
         "polylith_component_new" => {
-            let comp_name = arguments["name"].as_str().unwrap_or("");
+            let comp_name = match params["arguments"]["name"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
+            };
             let interface = arguments
                 .get("interface")
                 .and_then(|v| v.as_str())
                 .unwrap_or(comp_name);
-            match validate_brick_name(comp_name).and_then(|()| scaffold::create_component(root, comp_name, interface)) {
-                Ok(()) => format!("created component '{comp_name}' with interface '{interface}'"),
-                Err(e) => format!("error: {e:#}"),
+            let r: anyhow::Result<()> = (|| {
+                validate_brick_name(comp_name)?;
+                scaffold::create_component(root, comp_name, interface)?;
+                Ok(())
+            })();
+            match r {
+                Ok(()) => Ok(format!("created component '{comp_name}' with interface '{interface}'")),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
 
         "polylith_base_new" => {
-            let base_name = arguments["name"].as_str().unwrap_or("");
-            match validate_brick_name(base_name).and_then(|()| scaffold::create_base(root, base_name)) {
-                Ok(()) => format!("created base '{base_name}'"),
-                Err(e) => format!("error: {e:#}"),
+            let base_name = match params["arguments"]["name"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
+            };
+            let r: anyhow::Result<()> = (|| {
+                validate_brick_name(base_name)?;
+                scaffold::create_base(root, base_name)?;
+                Ok(())
+            })();
+            match r {
+                Ok(()) => Ok(format!("created base '{base_name}'")),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
 
         "polylith_project_new" => {
-            let project_name = arguments["name"].as_str().unwrap_or("");
-            match validate_brick_name(project_name).and_then(|()| scaffold::create_project(root, project_name)) {
-                Ok(()) => format!("created project '{project_name}'"),
-                Err(e) => format!("error: {e:#}"),
+            let project_name = match params["arguments"]["name"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
+            };
+            let r: anyhow::Result<()> = (|| {
+                validate_brick_name(project_name)?;
+                scaffold::create_project(root, project_name)?;
+                Ok(())
+            })();
+            match r {
+                Ok(()) => Ok(format!("created project '{project_name}'")),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
 
         "polylith_component_update" => {
-            let comp_name = arguments["name"].as_str().unwrap_or("");
-            let interface = arguments["interface"].as_str().unwrap_or("");
+            let comp_name = match params["arguments"]["name"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
+            };
+            let interface = match params["arguments"]["interface"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: interface".to_string()),
+            };
             match build_workspace_map(root) {
                 Ok(map) => {
                     match map.components.iter().find(|c| c.name == comp_name) {
                         Some(comp) => {
                             match scaffold::write_interface_to_toml(&comp.path, interface) {
-                                Ok(()) => format!("updated component '{comp_name}' interface to '{interface}'"),
-                                Err(e) => format!("error: {e:#}"),
+                                Ok(()) => Ok(format!("updated component '{comp_name}' interface to '{interface}'")),
+                                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
                             }
                         }
-                        None => format!("component '{comp_name}' not found in workspace"),
+                        None => Err(jsonrpc_error(id.clone(), -32000, format!("component '{comp_name}' not found in workspace"))),
                     }
                 }
-                Err(e) => format!("error: {e:#}"),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
 
         "polylith_profile_new" => {
-            let profile_name = arguments["name"].as_str().unwrap_or("");
-            match validate_brick_name(profile_name).and_then(|()| scaffold::create_profile(root, profile_name)) {
-                Ok(()) => format!("created profile '{profile_name}'"),
-                Err(e) => format!("error: {e:#}"),
+            let profile_name = match params["arguments"]["name"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
+            };
+            let r: anyhow::Result<()> = (|| {
+                validate_brick_name(profile_name)?;
+                scaffold::create_profile(root, profile_name)?;
+                Ok(())
+            })();
+            match r {
+                Ok(()) => Ok(format!("created profile '{profile_name}'")),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
 
         "polylith_profile_add" => {
-            let profile_name = arguments["profile"].as_str().unwrap_or("");
-            let interface = arguments["interface"].as_str().unwrap_or("");
-            let implementation = arguments["implementation"].as_str().unwrap_or("");
+            let profile_name = match params["arguments"]["profile"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: profile".to_string()),
+            };
+            let interface = match params["arguments"]["interface"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: interface".to_string()),
+            };
+            let implementation = match params["arguments"]["implementation"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: implementation".to_string()),
+            };
             match scaffold::add_profile_impl(root, profile_name, interface, implementation) {
-                Ok(()) => format!("updated profile '{profile_name}': {interface} → {implementation}"),
-                Err(e) => format!("error: {e:#}"),
+                Ok(()) => Ok(format!("updated profile '{profile_name}': {interface} → {implementation}")),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
 
         "polylith_base_update" => {
-            let base_name = arguments["name"].as_str().unwrap_or("");
+            let base_name = match params["arguments"]["name"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
+            };
             let test_base = arguments.get("test_base").and_then(|v| v.as_bool()).unwrap_or(false);
             match build_workspace_map(root) {
                 Ok(map) => {
                     match map.bases.iter().find(|b| b.name == base_name) {
                         Some(base) => {
                             match scaffold::write_test_base_to_toml(&base.path, test_base) {
-                                Ok(()) => format!("updated base '{base_name}': test-base = {test_base}"),
-                                Err(e) => format!("error: {e:#}"),
+                                Ok(()) => Ok(format!("updated base '{base_name}': test-base = {test_base}")),
+                                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
                             }
                         }
-                        None => format!("base '{base_name}' not found in workspace"),
+                        None => Err(jsonrpc_error(id.clone(), -32000, format!("base '{base_name}' not found in workspace"))),
                     }
                 }
-                Err(e) => format!("error: {e:#}"),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
 
-        _ => format!("unknown tool: {name}"),
+        "polylith_migrate_package_meta" => {
+            match scaffold::migrate_package_meta_to_cargo_toml(root) {
+                Ok(msg) => Ok(msg),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
+            }
+        }
+
+        _ => Err(jsonrpc_error(id.clone(), -32601, format!("unknown tool: {name}"))),
     };
 
+    match result {
+        Ok(text) => jsonrpc_success(id, text),
+        Err(err_response) => err_response,
+    }
+}
+
+fn jsonrpc_error(id: Value, code: i32, message: String) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message
+        }
+    })
+}
+
+fn jsonrpc_success(id: Value, text: String) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id,
         "result": {
-            "content": [{ "type": "text", "text": result_text }]
+            "content": [{ "type": "text", "text": text }]
         }
     })
 }
 
 fn method_not_found(id: Value, method: &str) -> Value {
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": {
-            "code": -32601,
-            "message": format!("method not found: {method}")
-        }
-    })
+    jsonrpc_error(id, -32601, format!("method not found: {method}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn jsonrpc_error_has_error_field_not_result() {
+        let resp = jsonrpc_error(json!(1), -32000, "something went wrong".to_string());
+        assert!(resp.get("error").is_some(), "response must have 'error' field");
+        assert!(resp.get("result").is_none(), "response must not have 'result' field");
+        assert_eq!(resp["error"]["code"], -32000);
+        assert_eq!(resp["error"]["message"], "something went wrong");
+        assert_eq!(resp["id"], 1);
+        assert_eq!(resp["jsonrpc"], "2.0");
+    }
+
+    #[test]
+    fn jsonrpc_error_invalid_params_code() {
+        let resp = jsonrpc_error(json!(42), -32602, "invalid params".to_string());
+        assert_eq!(resp["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn jsonrpc_error_method_not_found_code() {
+        let resp = jsonrpc_error(json!(null), -32601, "unknown tool: foo".to_string());
+        assert_eq!(resp["error"]["code"], -32601);
+        assert_eq!(resp["error"]["message"], "unknown tool: foo");
+    }
+
+    #[test]
+    fn jsonrpc_success_has_result_not_error() {
+        let resp = jsonrpc_success(json!(5), "hello".to_string());
+        assert!(resp.get("result").is_some(), "response must have 'result' field");
+        assert!(resp.get("error").is_none(), "response must not have 'error' field");
+        assert_eq!(resp["result"]["content"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn method_not_found_returns_jsonrpc_error() {
+        let resp = method_not_found(json!(3), "unknown_method");
+        assert!(resp.get("error").is_some());
+        assert_eq!(resp["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn tools_call_unknown_tool_returns_error_not_success() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "nonexistent_tool",
+                "arguments": {}
+            }
+        });
+        let root = std::path::Path::new("/tmp");
+        let resp = tools_call(json!(1), &req, root, false);
+        assert!(resp.get("error").is_some(), "unknown tool must return JSON-RPC error, not success");
+        assert!(resp.get("result").is_none(), "unknown tool must not return success result");
+        assert_eq!(resp["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn tools_call_write_tool_without_write_flag_returns_error() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "polylith_component_new",
+                "arguments": { "name": "my_comp" }
+            }
+        });
+        let root = std::path::Path::new("/tmp");
+        let resp = tools_call(json!(2), &req, root, false);
+        assert!(resp.get("error").is_some(), "write-disabled tool must return JSON-RPC error");
+        assert!(resp.get("result").is_none(), "write-disabled tool must not return success result");
+    }
 }

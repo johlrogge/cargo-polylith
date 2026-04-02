@@ -54,7 +54,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if app.cols.is_empty() && app.rows.is_empty() {
+    if app.cols.is_empty() && app.grid.rows.is_empty() {
         frame.render_widget(
             Paragraph::new("No projects, components, or bases found.\nPress 'n' to create a new project."),
             inner,
@@ -70,7 +70,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    if app.rows.is_empty() {
+    if app.grid.rows.is_empty() {
         frame.render_widget(
             Paragraph::new("No components or bases found."),
             inner,
@@ -79,7 +79,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let n_components = app.n_components();
-    let n_bases = app.rows.len() - n_components;
+    let n_bases = app.grid.rows.len() - n_components;
 
     // Section header rows: 1 per non-empty section
     let section_rows: u16 = (if n_components > 0 { 1 } else { 0 })
@@ -156,7 +156,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     // Interfaces with 2+ implementations → radio-button rendering
     let multi_impl_interfaces: std::collections::HashSet<&str> = {
         let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        for row in &app.rows {
+        for row in &app.grid.rows {
             if let Some(iface) = row.interface.as_deref() {
                 *counts.entry(iface).or_insert(0) += 1;
             }
@@ -182,7 +182,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
     let bottom = inner.y + inner.height;
 
     // Build fold plan: binary — chain rows shown, everything else hidden
-    let cursor_row_name = app.rows.get(app.cursor_row).map(|r| r.name.as_str()).unwrap_or("");
+    let cursor_row_name = app.grid.rows.get(app.cursor_row).map(|r| r.name.as_str()).unwrap_or("");
 
     let fold_plan: Vec<FoldEntry> = if app.fold_active && !chain_map.is_empty() {
         // Sort chain rows in dependency order:
@@ -191,7 +191,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         // 3. Downstream rows (level order)
         let mut upstream_by_step: Vec<(usize, usize)> = Vec::new(); // (step, row_idx)
         let mut downstream_by_level: Vec<(usize, usize)> = Vec::new(); // (level, row_idx)
-        for (row_i, row) in app.rows.iter().enumerate() {
+        for (row_i, row) in app.grid.rows.iter().enumerate() {
             if row.name == cursor_row_name { continue; }
             match chain_map.get(&row.name).copied() {
                 Some(ChainPosition::Upstream { step }) => {
@@ -212,7 +212,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         for (_, row_i) in downstream_by_level { ordered_chain.push(row_i); }
 
         let chain_set: std::collections::HashSet<usize> = ordered_chain.iter().copied().collect();
-        let non_chain_count = app.rows.len().saturating_sub(chain_set.len());
+        let non_chain_count = app.grid.rows.len().saturating_sub(chain_set.len());
 
         let mut plan: Vec<FoldEntry> = Vec::new();
         if non_chain_count > 0 {
@@ -223,7 +223,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
         plan
     } else {
-        (scroll_row..app.rows.len())
+        (scroll_row..app.grid.rows.len())
             .map(FoldEntry::Row)
             .collect()
     };
@@ -253,24 +253,20 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             }
             FoldEntry::Row(i) => i,
         };
-        let row_kind = app.rows[row_i].kind;
+        let row_kind = app.grid.rows[row_i].kind;
 
         // Section header before first component
-        if row_i < n_components && n_components > 0 && !components_header_shown {
-            if display_y < bottom {
-                draw_section_header(frame, inner, display_y, "── components");
-                display_y += 1;
-                components_header_shown = true;
-            }
+        if row_i < n_components && n_components > 0 && !components_header_shown && display_y < bottom {
+            draw_section_header(frame, inner, display_y, "── components");
+            display_y += 1;
+            components_header_shown = true;
         }
 
         // Section header before first base
-        if row_i >= n_components && n_bases > 0 && !bases_header_shown {
-            if display_y < bottom {
-                draw_section_header(frame, inner, display_y, "── bases");
-                display_y += 1;
-                bases_header_shown = true;
-            }
+        if row_i >= n_components && n_bases > 0 && !bases_header_shown && display_y < bottom {
+            draw_section_header(frame, inner, display_y, "── bases");
+            display_y += 1;
+            bases_header_shown = true;
         }
 
         if display_y >= bottom {
@@ -280,12 +276,12 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         let is_cursor_row = row_i == app.cursor_row;
 
         // Interface column — show only on the first row of each interface group.
-        let is_iface_start = match app.rows[row_i].interface.as_deref() {
+        let is_iface_start = match app.grid.rows[row_i].interface.as_deref() {
             None => false,
-            Some(iface) => row_i == 0 || app.rows[row_i - 1].interface.as_deref() != Some(iface),
+            Some(iface) => row_i == 0 || app.grid.rows[row_i - 1].interface.as_deref() != Some(iface),
         };
         let iface_str = if is_iface_start {
-            app.rows[row_i].interface.as_deref().unwrap_or("")
+            app.grid.rows[row_i].interface.as_deref().unwrap_or("")
         } else {
             ""
         };
@@ -297,7 +293,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         // Impl / base name column
-        let label = truncate(&app.rows[row_i].name, (IMPL_WIDTH - 1) as usize);
+        let label = truncate(&app.grid.rows[row_i].name, (IMPL_WIDTH - 1) as usize);
         let padded = format!("{:<width$}", label, width = (IMPL_WIDTH - 1) as usize);
         let label_style = match (row_kind, is_cursor_row) {
             (RowKind::Component, true) => {
@@ -318,17 +314,17 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
         for sc in 0..vis_cols {
             let col_i = scroll_col + sc;
             let dep_state = app
-                .cells
+                .grid.cells
                 .get(row_i)
                 .and_then(|r| r.get(col_i))
                 .copied()
                 .unwrap_or(DepState::None);
-            let modified = app.modified_cols.get(col_i).copied().unwrap_or(false);
+            let modified = app.grid.modified_cols.get(col_i).copied().unwrap_or(false);
             let is_cursor = is_cursor_row && col_i == app.cursor_col;
 
             // Chain highlighting: only in the cursor column, not on the cursor cell itself
             let chain_mark: Option<ChainPosition> = if col_i == app.cursor_col && !is_cursor {
-                let row_name = app.rows.get(row_i).map(|r| r.name.as_str()).unwrap_or("");
+                let row_name = app.grid.rows.get(row_i).map(|r| r.name.as_str()).unwrap_or("");
                 chain_map.get(row_name).copied()
             } else {
                 None
@@ -336,16 +332,16 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
 
             // Radio-button rendering for multi-implementation interface groups.
             // Computed before the cursor/chain branches so cursor cells can also show ◉/○.
-            let is_radio = app.rows.get(row_i)
+            let is_radio = app.grid.rows.get(row_i)
                 .and_then(|r| r.interface.as_deref())
                 .map(|iface| multi_impl_interfaces.contains(iface))
                 .unwrap_or(false);
 
-            let radio_selected = app.rows.get(row_i)
+            let radio_selected = app.grid.rows.get(row_i)
                 .and_then(|r| r.interface.as_deref())
                 .and_then(|iface| viewed_impl_map.get(iface))
                 .map(|&sel| {
-                    let rel = app.rows[row_i].path
+                    let rel = app.grid.rows[row_i].path
                         .strip_prefix(&app.workspace_root).ok()
                         .map(|p| p.to_string_lossy().into_owned());
                     rel.as_deref() == Some(sel)
@@ -355,11 +351,11 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
             // Radio only shown when this project column actually has some relationship with
             // this interface (at least one implementation is Direct or Transitive for this column)
             let project_uses_interface = if is_radio {
-                let iface = app.rows.get(row_i).and_then(|r| r.interface.as_deref());
+                let iface = app.grid.rows.get(row_i).and_then(|r| r.interface.as_deref());
                 iface.map(|iface_name| {
-                    app.rows.iter().enumerate().any(|(ri, r)| {
+                    app.grid.rows.iter().enumerate().any(|(ri, r)| {
                         r.interface.as_deref() == Some(iface_name)
-                        && app.cells.get(ri).and_then(|row| row.get(col_i))
+                        && app.grid.cells.get(ri).and_then(|row| row.get(col_i))
                             .copied().unwrap_or(DepState::None) != DepState::None
                     })
                 }).unwrap_or(false)
@@ -370,7 +366,7 @@ fn draw_grid(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let (ch, style) = if let Some(pos) = chain_mark {
                 match pos {
-                    ChainPosition::Upstream { step } if step == 1 => {
+                    ChainPosition::Upstream { step: 1 } => {
                         // Direct-dep entry point: light green bullet
                         (
                             "\u{25cf}".to_string(), // ●
@@ -496,7 +492,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let cursor_info = app
         .cols
         .get(app.cursor_col)
-        .zip(app.rows.get(app.cursor_row))
+        .zip(app.grid.rows.get(app.cursor_row))
         .map(|(col, row)| format!("  [{}/{}]", col.name, row.name))
         .unwrap_or_default();
     let fold_hint = if app.fold_active {

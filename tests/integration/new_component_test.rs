@@ -41,7 +41,7 @@ fn component_new_creates_files() {
 }
 
 #[test]
-fn component_lib_rs_re_exports() {
+fn component_lib_rs_has_mod_and_commented_reexport() {
     let dir = TempDir::new().unwrap();
     init_workspace(&dir);
 
@@ -53,7 +53,8 @@ fn component_lib_rs_re_exports() {
 
     let lib = fs::read_to_string(dir.path().join("components/my_comp/src/lib.rs")).unwrap();
     assert!(lib.contains("mod my_comp"), "lib.rs missing mod declaration");
-    assert!(lib.contains("pub use my_comp::*"), "lib.rs missing re-export");
+    assert!(!lib.contains("pub use my_comp::*"), "lib.rs must not contain wildcard re-export");
+    assert!(lib.contains("// pub use my_comp::"), "lib.rs missing commented re-export hint");
 }
 
 #[test]
@@ -125,11 +126,11 @@ fn base_new_creates_files() {
     let base = dir.path().join("bases/my_base");
     assert!(base.join("Cargo.toml").exists(), "Cargo.toml missing");
     assert!(base.join("src/lib.rs").exists(), "src/lib.rs missing");
-    assert!(base.join("src/main.rs").exists(), "src/main.rs missing");
+    assert!(!base.join("src/main.rs").exists(), "src/main.rs must not be generated for base");
 }
 
 #[test]
-fn base_cargo_toml_has_bin_section() {
+fn base_cargo_toml_has_no_bin_section() {
     let dir = TempDir::new().unwrap();
     init_workspace(&dir);
 
@@ -141,8 +142,8 @@ fn base_cargo_toml_has_bin_section() {
 
     let cargo_toml =
         fs::read_to_string(dir.path().join("bases/my_base/Cargo.toml")).unwrap();
-    assert!(cargo_toml.contains("[[bin]]"), "missing [[bin]] section");
-    assert!(cargo_toml.contains("main.rs"), "[[bin]] doesn't reference main.rs");
+    assert!(!cargo_toml.contains("[[bin]]"), "base Cargo.toml must not contain [[bin]] section");
+    assert!(!cargo_toml.contains("main.rs"), "base Cargo.toml must not reference main.rs");
 }
 
 #[test]

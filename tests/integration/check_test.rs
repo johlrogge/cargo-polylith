@@ -405,7 +405,7 @@ fn check_json_shows_violation_kind() {
     let parsed: serde_json::Value = serde_json::from_str(text).expect("not valid JSON");
     let violations = parsed["violations"].as_array().unwrap();
     assert!(!violations.is_empty());
-    assert!(violations.iter().any(|v| v["kind"] == "missing_lib_rs"), "{violations:?}");
+    assert!(violations.iter().any(|v| v["kind"].get("missing_lib_rs").is_some()), "{violations:?}");
 }
 
 // ── missing interface annotation on stub-named component ─────────────────────

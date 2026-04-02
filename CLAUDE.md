@@ -42,7 +42,7 @@ cargo polylith --help
 
 - `toml_edit` (not `toml`) when writing back to existing Cargo.toml files — preserves comments and formatting.
 - `cargo_toml` for typed reading of Cargo.toml files.
-- Error handling: `anyhow` for command-level errors, `thiserror` for domain errors in `workspace/`.
+- Error handling: `workspace/` and `scaffold/` use typed `thiserror` domain errors (incubating general-purpose crates). `commands/` and `tui/` use `anyhow`.
 - All file templates live in `src/scaffold/templates.rs` as Rust string literals.
 - Integration tests use `assert_cmd` + `tempfile` — spawn subprocess, assert files and stdout.
 

@@ -3,11 +3,13 @@ mod commands;
 mod corsett;
 mod output;
 mod scaffold;
+mod toml_utils;
 mod tui;
 mod workspace;
 
 use clap::Parser;
 use cli::{CargoCommand, PolylithCommand};
+use commands::CommandError;
 
 fn main() {
     let cargo = cli::Cargo::parse();
@@ -16,7 +18,7 @@ fn main() {
     let workspace_root = args.workspace_root.as_deref();
 
     let result = match args.command {
-        PolylithCommand::Init => commands::init::run(),
+        PolylithCommand::Init => commands::init::run(workspace_root),
         PolylithCommand::Component { action } => {
             use cli::ComponentAction;
             match action {
@@ -85,6 +87,9 @@ fn main() {
     };
 
     if let Err(e) = result {
+        if let Some(CommandError::ProcessExit(code)) = e.downcast_ref::<CommandError>() {
+            std::process::exit(*code);
+        }
         eprintln!("error: {e:#}");
         std::process::exit(1);
     }

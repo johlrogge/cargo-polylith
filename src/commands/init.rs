@@ -1,11 +1,14 @@
 use std::env;
+use std::path::Path;
 
 use anyhow::Result;
 
 use crate::scaffold;
+use crate::workspace::resolve_root;
 
-pub fn run() -> Result<()> {
-    let root = env::current_dir()?;
+pub fn run(workspace_root: Option<&Path>) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let root = resolve_root(&cwd, workspace_root)?;
     let warnings = scaffold::init_workspace(&root)?;
     for w in &warnings {
         eprintln!("warning: {w}");
