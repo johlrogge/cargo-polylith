@@ -34,6 +34,8 @@ pub struct PolylithToml {
     pub versioning_policy: Option<VersioningPolicy>,
     /// Workspace/distro version from `[versioning] version`. `None` means legacy workspace (not configured).
     pub workspace_version: Option<String>,
+    /// Tag prefix from `[versioning] tag_prefix`. `None` means not configured.
+    pub tag_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]

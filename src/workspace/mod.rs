@@ -1,8 +1,11 @@
+pub mod api_diff;
 pub mod check;
 pub mod discover;
 pub mod error;
+pub mod git;
 pub mod model;
 pub mod status;
+pub mod strict_bump;
 pub mod version;
 
 pub use check::{check_profile, run_checks};

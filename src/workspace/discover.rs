@@ -414,7 +414,7 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
     }
 
     // Parse [versioning] section — missing section means legacy workspace (both fields None).
-    let (versioning_policy, workspace_version) = if let Some(ver) = doc.get("versioning").and_then(|t| t.as_table()) {
+    let (versioning_policy, workspace_version, tag_prefix) = if let Some(ver) = doc.get("versioning").and_then(|t| t.as_table()) {
         let policy = if let Some(policy_str) = ver.get("policy").and_then(|v| v.as_value()).and_then(|v| v.as_str()) {
             let p = match policy_str {
                 "relaxed" => VersioningPolicy::Relaxed,
@@ -429,9 +429,10 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
             None
         };
         let version = ver.get("version").and_then(|v| v.as_value()).and_then(|v| v.as_str()).map(|s| s.to_string());
-        (policy, version)
+        let tag_prefix = ver.get("tag_prefix").and_then(|v| v.as_value()).and_then(|v| v.as_str()).map(|s| s.to_string());
+        (policy, version, tag_prefix)
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     Ok(Some(PolylithToml {
@@ -440,6 +441,7 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
         profiles,
         versioning_policy,
         workspace_version,
+        tag_prefix,
     }))
 }
 

@@ -91,10 +91,13 @@ pub enum PolylithCommand {
         #[command(subcommand)]
         action: ProfileAction,
     },
-    /// Bump the workspace version (relaxed mode only)
+    /// Bump the workspace version
     Bump {
-        /// Bump level: major, minor, or patch
-        level: String,
+        /// Bump level: major, minor, or patch (required in relaxed mode, auto-detected in strict)
+        level: Option<String>,
+        /// Show recommendations without writing changes
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Run a cargo command against a generated profile workspace
     Cargo {

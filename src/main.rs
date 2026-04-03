@@ -45,9 +45,20 @@ fn main() {
                 ProjectAction::New { name } => commands::project::new(&name, workspace_root),
             }
         }
-        PolylithCommand::Bump { level } => commands::bump::run(&level, workspace_root).map(
-            |(old, new)| println!("bumped workspace version: {old} \u{2192} {new}"),
-        ),
+        PolylithCommand::Bump { level, dry_run } => {
+            use commands::bump::BumpResult;
+            use output::table::{print_strict_bump_report};
+            commands::bump::run(level.as_deref(), workspace_root, dry_run).map(|result| {
+                match result {
+                    BumpResult::Relaxed { old, new } => {
+                        println!("bumped workspace version: {old} \u{2192} {new}");
+                    }
+                    BumpResult::Strict { recommendations, no_prior_tag: _ } => {
+                        print_strict_bump_report(&recommendations);
+                    }
+                }
+            })
+        }
         PolylithCommand::Deps { component, json } => {
             commands::deps::run(component.as_deref(), json, workspace_root)
         }

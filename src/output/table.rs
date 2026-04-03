@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::workspace::check::{Violation, ViolationKind};
 use crate::workspace::model::{Profile, WorkspaceMap};
 use crate::workspace::status::StatusReport;
+use crate::workspace::strict_bump::{ChangeSeverity, ProjectBumpRecommendation};
 use crate::workspace::{classify_dep, DepKind};
 
 pub fn print_info(map: &WorkspaceMap) {
@@ -271,6 +272,53 @@ pub fn print_status_json(report: &StatusReport) {
 pub fn print_check_json(violations: &[Violation]) {
     println!("{}", serde_json::to_string_pretty(&json!({ "violations": violations })).unwrap());
 }
+
+/// Print strict bump recommendations as a human-readable table.
+/// Strict mode is always analysis-only; the output always shows recommendations without writing.
+pub fn print_strict_bump_report(recommendations: &[ProjectBumpRecommendation]) {
+    println!("{}", "Strict bump analysis (analysis only — apply changes manually or use relaxed mode):".bold());
+    println!();
+
+    if recommendations.is_empty() {
+        println!("{}", "  No projects found.".dimmed());
+        return;
+    }
+
+    for rec in recommendations {
+        let level_str = match rec.recommended_level {
+            None => "none".dimmed().to_string(),
+            Some(crate::workspace::BumpLevel::Patch) => "patch".cyan().to_string(),
+            Some(crate::workspace::BumpLevel::Minor) => "minor".yellow().to_string(),
+            Some(crate::workspace::BumpLevel::Major) => "major".red().to_string(),
+        };
+
+        let version_change = match &rec.recommended_version {
+            None => format!("{} (no change)", rec.current_version).dimmed().to_string(),
+            Some(new_v) => format!("{} -> {}", rec.current_version, new_v).green().to_string(),
+        };
+
+        println!("  {} [{}] {}", rec.project_name.yellow().bold(), level_str, version_change);
+
+        if !rec.changed_bricks.is_empty() {
+            println!("    {}", "Changed bricks:".dimmed());
+            for brick_name in &rec.changed_bricks {
+                println!("      {}", brick_name.green());
+            }
+        }
+        println!("    Severity: {}", severity_label(rec.worst_severity));
+        println!();
+    }
+}
+
+fn severity_label(severity: ChangeSeverity) -> colored::ColoredString {
+    match severity {
+        ChangeSeverity::Unchanged => "unchanged".dimmed(),
+        ChangeSeverity::TransitivePatch => "transitive patch".cyan(),
+        ChangeSeverity::InternalsChanged => "internals changed".yellow(),
+        ChangeSeverity::InterfaceChanged => "interface changed".red(),
+    }
+}
+
 
 pub fn print_deps_json(map: &WorkspaceMap, filter_component: Option<&str>) {
     let bases: Vec<_> = map
