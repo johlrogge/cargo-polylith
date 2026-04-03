@@ -158,6 +158,7 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::ProfileImplNotAComponent { .. } => "profile-impl-not-component".red().to_string(),
             ViolationKind::HardwiredDep { .. }         => "hardwired-dep".yellow().to_string(),
             ViolationKind::HardwiredImplDep { .. }     => "hardwired-impl".red().to_string(),
+            ViolationKind::BrickNotUsingWorkspaceVersion { .. } => "not-workspace-version".yellow().to_string(),
         };
         println!("  [{tag}] {}", v.kind);
     }

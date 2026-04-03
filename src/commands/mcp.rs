@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use crate::commands::validate::validate_brick_name;
 use crate::scaffold;
 use crate::workspace::{build_workspace_map, classify_dep, discover_profiles, resolve_root, run_checks, run_status, DepKind};
+use crate::commands::bump as bump_cmd;
 
 pub fn serve(workspace_root: Option<&Path>, write: bool) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -186,6 +187,21 @@ fn tools_list(id: Value, write: bool) -> Value {
                 "description": "Migrate [workspace.package] metadata from Polylith.toml to root Cargo.toml [package]",
                 "inputSchema": { "type": "object", "properties": {} }
             }),
+            json!({
+                "name": "polylith_bump",
+                "description": "Bump the workspace version in Polylith.toml (relaxed mode only). Updates Polylith.toml and root Cargo.toml [workspace.package] version.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["level"],
+                    "properties": {
+                        "level": {
+                            "type": "string",
+                            "enum": ["major", "minor", "patch"],
+                            "description": "Bump level: major, minor, or patch"
+                        }
+                    }
+                }
+            }),
         ]);
     }
 
@@ -341,7 +357,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
         "polylith_component_new" | "polylith_base_new" | "polylith_project_new"
         | "polylith_component_update"
         | "polylith_profile_new" | "polylith_profile_add" | "polylith_base_update"
-        | "polylith_migrate_package_meta"
+        | "polylith_migrate_package_meta" | "polylith_bump"
             if !write =>
         {
             Err(jsonrpc_error(
@@ -488,6 +504,17 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
         "polylith_migrate_package_meta" => {
             match scaffold::migrate_package_meta_to_cargo_toml(root) {
                 Ok(msg) => Ok(msg),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
+            }
+        }
+
+        "polylith_bump" => {
+            let level = match params["arguments"]["level"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: level".to_string()),
+            };
+            match bump_cmd::run(level, Some(root)) {
+                Ok((old, new)) => Ok(format!("bumped workspace version: {old} -> {new}")),
                 Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }

@@ -3,8 +3,8 @@ use std::fmt;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 
-use super::model::WorkspaceMap;
-use super::{classify_dep, transitive_closure, DepKind};
+use super::model::{VersioningPolicy, WorkspaceMap};
+use super::{classify_dep, transitive_closure, version, DepKind};
 
 /// A single violation found during `check`.
 #[derive(Debug, Clone)]
@@ -106,6 +106,8 @@ pub enum ViolationKind {
         dep: String,
         package: String,
     },
+    /// A brick's Cargo.toml does not use `version.workspace = true` in a relaxed-mode workspace.
+    BrickNotUsingWorkspaceVersion { brick_name: String },
 }
 
 impl fmt::Display for ViolationKind {
@@ -172,6 +174,9 @@ impl fmt::Display for ViolationKind {
             }
             ViolationKind::HardwiredImplDep { brick, dep, package } => {
                 write!(f, "'{brick}': dep '{dep}' uses `package = \"{package}\"` — this hardwires a specific implementation instead of coding against the interface")
+            }
+            ViolationKind::BrickNotUsingWorkspaceVersion { brick_name } => {
+                write!(f, "brick '{brick_name}' does not use `version.workspace = true` — in relaxed mode all brick versions should follow the workspace version")
             }
         }
     }
@@ -582,6 +587,19 @@ pub fn run_checks(map: &WorkspaceMap, profiles: &[super::model::Profile]) -> Vec
         }
     }
 
+    // --- relaxed-mode workspace version checks ---
+    if let Some(pt) = &map.polylith_toml {
+        if pt.versioning_policy == Some(VersioningPolicy::Relaxed) {
+            let all_bricks: Vec<_> = map.components.iter().chain(map.bases.iter()).cloned().collect();
+            let missing = version::bricks_not_using_workspace_version(&all_bricks);
+            for name in missing {
+                violations.push(Violation {
+                    kind: ViolationKind::BrickNotUsingWorkspaceVersion { brick_name: name },
+                });
+            }
+        }
+    }
+
     violations
 }
 
@@ -608,6 +626,7 @@ pub fn is_warning_kind(k: &ViolationKind) -> bool {
         ViolationKind::ProfileImplNotAComponent { .. } => false,
         ViolationKind::HardwiredDep { .. } => true,
         ViolationKind::HardwiredImplDep { .. } => false,
+        ViolationKind::BrickNotUsingWorkspaceVersion { .. } => true,
     }
 }
 

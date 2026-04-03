@@ -3,6 +3,7 @@ pub mod discover;
 pub mod error;
 pub mod model;
 pub mod status;
+pub mod version;
 
 pub use check::{check_profile, run_checks};
 pub use discover::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, read_polylith_toml, read_root_package_meta, resolve_profile_workspace, resolve_root};
@@ -13,6 +14,7 @@ pub use error::WorkspaceError;
 #[allow(unused_imports)]
 pub use model::{PolylithToml, Profile, ResolvedProfileWorkspace, RootDemotionPlan, VersioningPolicy, WorkspaceMap, WorkspacePackageMeta};
 pub use status::run_status;
+pub use version::{BumpLevel, compute_bumped_version};
 
 /// BFS transitive closure over a dependency graph.
 ///

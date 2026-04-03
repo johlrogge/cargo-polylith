@@ -869,3 +869,41 @@ fn add_workspace_member(root: &Path, member: &str) -> Result<()> {
     fs::write(&manifest_path, doc.to_string()).map_err(io_err(&manifest_path))?;
     Ok(())
 }
+
+/// Write the new version to `Polylith.toml` `[versioning] version` field.
+/// Uses `toml_edit` to preserve formatting and comments.
+pub fn write_polylith_version(root: &Path, new_version: &str) -> Result<()> {
+    let path = root.join("Polylith.toml");
+    let content = fs::read_to_string(&path).map_err(io_err(&path))?;
+    let mut doc: toml_edit::DocumentMut = content.parse().map_err(toml_err(&path))?;
+    doc["versioning"]["version"] = toml_edit::value(new_version);
+    fs::write(&path, doc.to_string()).map_err(io_err(&path))?;
+    Ok(())
+}
+
+/// Write `[workspace.package] version` in a root Cargo.toml.
+/// Creates `[workspace]` and `[workspace.package]` tables if they don't exist.
+/// Uses `toml_edit` to preserve formatting and comments.
+/// Update the version in `[workspace.package]` of the given `Cargo.toml`.
+///
+/// Returns `Ok(())` without writing anything if `[workspace.package]` does not
+/// exist — the version source of truth is `Polylith.toml`, not `Cargo.toml`.
+/// Tables are never created; only an existing `[workspace.package]` is updated.
+pub fn write_workspace_package_version(cargo_toml_path: &Path, new_version: &str) -> Result<()> {
+    let content = fs::read_to_string(cargo_toml_path).map_err(io_err(cargo_toml_path))?;
+    let mut doc: toml_edit::DocumentMut = content.parse().map_err(toml_err(cargo_toml_path))?;
+
+    // Only update if [workspace.package] already exists.
+    let has_workspace_package = doc
+        .get("workspace")
+        .and_then(|ws| ws.get("package"))
+        .is_some();
+
+    if !has_workspace_package {
+        return Ok(());
+    }
+
+    doc["workspace"]["package"]["version"] = toml_edit::value(new_version);
+    fs::write(cargo_toml_path, doc.to_string()).map_err(io_err(cargo_toml_path))?;
+    Ok(())
+}

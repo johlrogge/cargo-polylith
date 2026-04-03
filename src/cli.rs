@@ -91,6 +91,11 @@ pub enum PolylithCommand {
         #[command(subcommand)]
         action: ProfileAction,
     },
+    /// Bump the workspace version (relaxed mode only)
+    Bump {
+        /// Bump level: major, minor, or patch
+        level: String,
+    },
     /// Run a cargo command against a generated profile workspace
     Cargo {
         /// Profile name to activate (defaults to "dev")

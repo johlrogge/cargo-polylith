@@ -45,6 +45,9 @@ fn main() {
                 ProjectAction::New { name } => commands::project::new(&name, workspace_root),
             }
         }
+        PolylithCommand::Bump { level } => commands::bump::run(&level, workspace_root).map(
+            |(old, new)| println!("bumped workspace version: {old} \u{2192} {new}"),
+        ),
         PolylithCommand::Deps { component, json } => {
             commands::deps::run(component.as_deref(), json, workspace_root)
         }
