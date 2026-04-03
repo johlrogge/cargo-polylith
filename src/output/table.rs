@@ -160,6 +160,13 @@ pub fn print_check(violations: &[Violation]) {
             ViolationKind::HardwiredDep { .. }         => "hardwired-dep".yellow().to_string(),
             ViolationKind::HardwiredImplDep { .. }     => "hardwired-impl".red().to_string(),
             ViolationKind::BrickNotUsingWorkspaceVersion { .. } => "not-workspace-version".yellow().to_string(),
+            ViolationKind::BrickChangedWithoutVersionBump { enforcement, .. } => {
+                if *enforcement == crate::workspace::check::VersionEnforcement::Enforce {
+                    "version-not-bumped".red().to_string()
+                } else {
+                    "version-not-bumped".yellow().to_string()
+                }
+            }
         };
         println!("  [{tag}] {}", v.kind);
     }

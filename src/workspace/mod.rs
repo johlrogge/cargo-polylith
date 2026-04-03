@@ -8,7 +8,8 @@ pub mod status;
 pub mod strict_bump;
 pub mod version;
 
-pub use check::{check_profile, run_checks};
+#[allow(unused_imports)]
+pub use check::{check_profile, run_checks, run_version_checks, VersionEnforcement};
 pub use discover::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, read_polylith_toml, read_root_package_meta, resolve_profile_workspace, resolve_root};
 // Re-exported so callers can match on specific workspace errors without
 // reaching into the internal `error` module.

@@ -68,6 +68,53 @@ pub fn extract_version_from_cargo_toml_content(content: &str) -> Option<String> 
         .map(|s| s.to_string())
 }
 
+/// Get the current git branch name. Returns None for detached HEAD.
+pub fn current_branch(root: &Path) -> Result<Option<String>, WorkspaceError> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(root)
+        .output()
+        .map_err(|e| WorkspaceError::Other(format!("failed to run git: {e}")))?;
+
+    if !output.status.success() {
+        return Ok(None); // not a git repo
+    }
+
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch == "HEAD" {
+        Ok(None) // detached HEAD
+    } else {
+        Ok(Some(branch))
+    }
+}
+
+/// Get list of files changed between a ref and HEAD.
+pub fn files_changed_since_ref(root: &Path, ref_name: &str) -> Result<Vec<String>, WorkspaceError> {
+    let output = Command::new("git")
+        .args(["diff", "--name-only", &format!("{ref_name}..HEAD")])
+        .current_dir(root)
+        .output()
+        .map_err(|e| WorkspaceError::Other(format!("failed to run git diff: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // "not a git repository" is expected in non-git dirs — return empty.
+        if stderr.contains("not a git repository") {
+            return Ok(Vec::new());
+        }
+        return Err(WorkspaceError::Other(format!(
+            "git diff --name-only failed: {}",
+            stderr.trim()
+        )));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.to_string())
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::extract_version_from_cargo_toml_content;

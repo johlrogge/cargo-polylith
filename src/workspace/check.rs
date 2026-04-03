@@ -4,7 +4,31 @@ use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 
 use super::model::{VersioningPolicy, WorkspaceMap};
-use super::{classify_dep, transitive_closure, version, DepKind};
+use super::{classify_dep, git, transitive_closure, version, DepKind};
+
+/// Enforcement level for version checks, derived from git-flow branch name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VersionEnforcement {
+    /// No version checks performed (e.g., feature branches).
+    Skip,
+    /// Version check violations are warnings only (exit 0).
+    Warn,
+    /// Version check violations are hard errors (exit 1).
+    Enforce,
+}
+
+/// Determine the enforcement level from the current branch name.
+pub fn enforcement_from_branch(branch: Option<&str>) -> VersionEnforcement {
+    match branch {
+        Some(b) if b.starts_with("feature/") => VersionEnforcement::Skip,
+        Some(b) if b == "main" || b == "master" => VersionEnforcement::Skip,
+        Some(b) if b.starts_with("release/") => VersionEnforcement::Enforce,
+        Some(b) if b.starts_with("hotfix/") => VersionEnforcement::Enforce,
+        Some("develop") => VersionEnforcement::Warn,
+        _ => VersionEnforcement::Warn, // unknown branch or detached HEAD
+    }
+}
 
 /// A single violation found during `check`.
 #[derive(Debug, Clone)]
@@ -108,6 +132,11 @@ pub enum ViolationKind {
     },
     /// A brick's Cargo.toml does not use `version.workspace = true` in a relaxed-mode workspace.
     BrickNotUsingWorkspaceVersion { brick_name: String },
+    /// A brick had files changed since the last release tag but its version was not bumped.
+    BrickChangedWithoutVersionBump {
+        brick_name: String,
+        enforcement: VersionEnforcement,
+    },
 }
 
 impl fmt::Display for ViolationKind {
@@ -177,6 +206,9 @@ impl fmt::Display for ViolationKind {
             }
             ViolationKind::BrickNotUsingWorkspaceVersion { brick_name } => {
                 write!(f, "brick '{brick_name}' does not use `version.workspace = true` — in relaxed mode all brick versions should follow the workspace version")
+            }
+            ViolationKind::BrickChangedWithoutVersionBump { brick_name, .. } => {
+                write!(f, "brick '{brick_name}' has changed since the last release tag but its version was not bumped — bump the version in {brick_name}/Cargo.toml")
             }
         }
     }
@@ -627,7 +659,109 @@ pub fn is_warning_kind(k: &ViolationKind) -> bool {
         ViolationKind::HardwiredDep { .. } => true,
         ViolationKind::HardwiredImplDep { .. } => false,
         ViolationKind::BrickNotUsingWorkspaceVersion { .. } => true,
+        ViolationKind::BrickChangedWithoutVersionBump { enforcement, .. } => {
+            *enforcement != VersionEnforcement::Enforce
+        }
     }
+}
+
+/// Run version enforcement checks against `map` using the given enforcement level.
+///
+/// Returns empty if enforcement is `Skip` or if versioning policy is not `Strict`.
+/// For each brick with files changed since the last release tag, emits a
+/// `BrickChangedWithoutVersionBump` violation if the brick's version has not changed.
+///
+/// Note: only committed changes are considered (both file changes and version bumps
+/// are read from git HEAD). This matches the push-hook use case where all changes
+/// are committed. If running interactively, commit version bumps before checking.
+pub fn run_version_checks(
+    map: &WorkspaceMap,
+    enforcement: VersionEnforcement,
+) -> Vec<Violation> {
+    if enforcement == VersionEnforcement::Skip {
+        return vec![];
+    }
+
+    // Only apply to strict-mode workspaces.
+    let polylith_toml = match &map.polylith_toml {
+        Some(pt) if pt.versioning_policy == Some(VersioningPolicy::Strict) => pt,
+        _ => return vec![],
+    };
+
+    let tag_prefix = polylith_toml.tag_prefix.as_deref().unwrap_or("v");
+
+    // Find the last release tag.
+    let last_tag = match git::find_last_release_tag(&map.root, tag_prefix) {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+
+    // Get the ref to diff against. If no tag exists, use git's well-known empty tree hash
+    // (all files appear as new, meaning every brick needs a version bump for first release).
+    const GIT_EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+    let diff_ref: String = match &last_tag {
+        Some(tag) => tag.clone(),
+        None => GIT_EMPTY_TREE.to_string(),
+    };
+
+    // Get files changed since the ref.
+    let changed_files = match git::files_changed_since_ref(&map.root, &diff_ref) {
+        Ok(files) => files,
+        Err(_) => return vec![],
+    };
+
+    let mut violations = vec![];
+
+    // For each brick, check if any of its files are in the changed list.
+    for brick in map.components.iter().chain(map.bases.iter()) {
+        let rel = match brick.path.strip_prefix(&map.root) {
+            Ok(p) => p.to_string_lossy().replace('\\', "/"),
+            Err(_) => continue,
+        };
+
+        let brick_changed = changed_files.iter().any(|f| {
+            f.starts_with(&format!("{rel}/")) || f == rel.as_str()
+        });
+
+        if !brick_changed {
+            continue;
+        }
+
+        // Compare current version to version at the tag.
+        let cargo_toml_rel = format!("{rel}/Cargo.toml");
+
+        let version_at_tag = match &last_tag {
+            Some(tag) => git::read_file_at_ref(&map.root, tag, &cargo_toml_rel)
+                .ok()
+                .flatten()
+                .and_then(|content| git::extract_version_from_cargo_toml_content(&content)),
+            None => None, // No prior tag means any version is a bump
+        };
+
+        let current_version = git::read_file_at_ref(&map.root, "HEAD", &cargo_toml_rel)
+            .ok()
+            .flatten()
+            .and_then(|content| git::extract_version_from_cargo_toml_content(&content));
+
+        // If there was no prior tag, any version bump is acceptable —
+        // but if neither version exists or they are equal, that's a problem.
+        let needs_bump = match (&version_at_tag, &current_version) {
+            (None, _) => false,               // First release: no prior tag to compare
+            (Some(_), None) => false,         // Can't read current version — skip
+            (Some(old), Some(new)) => old == new, // Version unchanged despite code change
+        };
+
+        if needs_bump {
+            violations.push(Violation {
+                kind: ViolationKind::BrickChangedWithoutVersionBump {
+                    brick_name: brick.name.clone(),
+                    enforcement,
+                },
+            });
+        }
+    }
+
+    violations
 }
 
 /// Validate a profile against the workspace map.
@@ -678,5 +812,50 @@ fn member_covers(pattern: &str, rel_path: &str) -> bool {
             .unwrap_or(false)
     } else {
         rel_path == pattern
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{enforcement_from_branch, VersionEnforcement};
+
+    #[test]
+    fn enforcement_feature_branch_is_skip() {
+        assert_eq!(enforcement_from_branch(Some("feature/my-thing")), VersionEnforcement::Skip);
+    }
+
+    #[test]
+    fn enforcement_develop_is_warn() {
+        assert_eq!(enforcement_from_branch(Some("develop")), VersionEnforcement::Warn);
+    }
+
+    #[test]
+    fn enforcement_release_is_enforce() {
+        assert_eq!(enforcement_from_branch(Some("release/1.0")), VersionEnforcement::Enforce);
+    }
+
+    #[test]
+    fn enforcement_hotfix_is_enforce() {
+        assert_eq!(enforcement_from_branch(Some("hotfix/fix-critical")), VersionEnforcement::Enforce);
+    }
+
+    #[test]
+    fn enforcement_main_is_skip() {
+        assert_eq!(enforcement_from_branch(Some("main")), VersionEnforcement::Skip);
+    }
+
+    #[test]
+    fn enforcement_master_is_skip() {
+        assert_eq!(enforcement_from_branch(Some("master")), VersionEnforcement::Skip);
+    }
+
+    #[test]
+    fn enforcement_unknown_branch_is_warn() {
+        assert_eq!(enforcement_from_branch(Some("some-other-branch")), VersionEnforcement::Warn);
+    }
+
+    #[test]
+    fn enforcement_detached_head_is_warn() {
+        assert_eq!(enforcement_from_branch(None), VersionEnforcement::Warn);
     }
 }

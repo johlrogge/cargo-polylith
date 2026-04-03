@@ -505,9 +505,11 @@ correct component-to-component swapping: if a component depends on
 
 ---
 
-### `cargo polylith bump [major|minor|patch]`
+### `cargo polylith bump [level] [--dry-run]`
 
-Bumps the workspace version in `Polylith.toml` and (if `[workspace.package]` is present) in the root `Cargo.toml`.
+Bumps the workspace version. Behaviour depends on the versioning policy in `Polylith.toml`.
+
+**Relaxed mode** — level is required:
 
 ```
 cargo polylith bump patch    # 0.3.1 → 0.3.2
@@ -515,7 +517,27 @@ cargo polylith bump minor    # 0.3.1 → 0.4.0
 cargo polylith bump major    # 0.3.1 → 1.0.0
 ```
 
-Requires `Polylith.toml` to have a `[versioning]` section with `policy = "relaxed"`. Strict mode is defined in [ADR-001](docs/adr/001-versioning-model.md) and planned for a future release.
+Writes the new version to `Polylith.toml` and (if `[workspace.package]` is present) to the root `Cargo.toml`.
+
+**Strict mode** — level is auto-detected:
+
+```
+cargo polylith bump            # analyzes changes, recommends per-project bump levels
+cargo polylith bump --dry-run  # same analysis, no writes
+```
+
+`cargo polylith bump` in strict mode:
+
+1. Finds the last git-flow release tag (respecting `tag_prefix` in `[versioning]`)
+2. For each brick changed since that tag, compares the public API surface using `syn`
+3. Walks the dependency graph per project and accumulates change signals:
+   - Public API change → major signal
+   - Internal change only → minor or patch (informed by conventional commits)
+   - Transitive dependency change only → patch signal
+4. Reports a semver recommendation per project
+5. Writes the new workspace version to `Polylith.toml` (skipped with `--dry-run`)
+
+Strict mode is currently analysis-only — project `Cargo.toml` versions are not written yet. `--dry-run` suppresses the workspace version write as well, making the command a pure report.
 
 See [Versioning](#versioning) below for how to configure `Polylith.toml`.
 
@@ -585,7 +607,7 @@ Communicates over stdin/stdout using the standard MCP JSON-RPC transport.
 | `polylith_profile_new` | Create a new empty profile file |
 | `polylith_profile_list` | List all profiles and their implementation selections |
 | `polylith_profile_add` | Add or update an implementation selection in a profile |
-| `polylith_bump` | Bump the workspace version in `Polylith.toml` (relaxed mode only); accepts `level`: `major`, `minor`, or `patch` |
+| `polylith_bump` | Bump the workspace version in `Polylith.toml`; `level` (`major`, `minor`, `patch`) required in relaxed mode, auto-detected in strict mode; accepts `dry_run: true` |
 
 To wire up an AI assistant (e.g. Claude Code), add to `.mcp.json` at the workspace root:
 
@@ -617,13 +639,26 @@ version = "0.1.0"
 
 ### Relaxed mode (default)
 
-All brick versions equal the workspace version. Bricks declare `version.workspace = true` in their `Cargo.toml` and follow the workspace version automatically. Use `cargo polylith bump` to advance the version at release time.
+All brick versions equal the workspace version. Bricks declare `version.workspace = true` in their `Cargo.toml` and follow the workspace version automatically. Use `cargo polylith bump <level>` to advance the version at release time.
 
 `cargo polylith check` warns (`not-workspace-version`) for any brick whose `Cargo.toml` does not use `version.workspace = true`.
 
-### Strict mode (planned)
+### Strict mode
 
-Each brick owns its version as a change-tracking signal. At release time, `cargo polylith bump` walks the dependency graph per project and computes a semver recommendation from accumulated change signals. See [ADR-001](docs/adr/001-versioning-model.md) for the full design.
+Each brick owns its version as a change-tracking signal, bumped during development. At release time, `cargo polylith bump` (no level argument required) analyzes the public API surface of changed bricks with `syn`, walks the dependency graph, and recommends a semver bump level per project.
+
+Enable strict mode in `Polylith.toml`:
+
+```toml
+[versioning]
+policy = "strict"
+version = "0.1.0"
+tag_prefix = "v"   # optional; matches your git-flow tag prefix (default "v")
+```
+
+`tag_prefix` controls how the tool identifies the last release tag when comparing brick versions. It should match what `git flow init` configured (typically `v`).
+
+See [ADR-001](docs/adr/001-versioning-model.md) for the full design rationale.
 
 ### Generated files
 
