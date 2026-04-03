@@ -3,6 +3,16 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+/// Versioning policy for the polylith workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VersioningPolicy {
+    /// All brick versions equal the workspace version.
+    Relaxed,
+    /// Every brick owns its version in its own `Cargo.toml`.
+    Strict,
+}
+
 /// Shared package metadata from root `Cargo.toml` `[package]`.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspacePackageMeta {
@@ -20,6 +30,10 @@ pub struct PolylithToml {
     pub libraries: HashMap<String, ExternalDepInfo>,
     /// Maps profile name → relative path to `.profile` file.
     pub profiles: HashMap<String, String>,
+    /// Versioning policy from `[versioning] policy`. `None` means legacy workspace (not configured).
+    pub versioning_policy: Option<VersioningPolicy>,
+    /// Workspace/distro version from `[versioning] version`. `None` means legacy workspace (not configured).
+    pub workspace_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]

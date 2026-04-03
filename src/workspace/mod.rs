@@ -10,7 +10,8 @@ pub use discover::{build_workspace_map, collect_root_interface_deps, discover_pr
 // reaching into the internal `error` module.
 #[allow(unused_imports)]
 pub use error::WorkspaceError;
-pub use model::{PolylithToml, Profile, ResolvedProfileWorkspace, RootDemotionPlan, WorkspaceMap, WorkspacePackageMeta};
+#[allow(unused_imports)]
+pub use model::{PolylithToml, Profile, ResolvedProfileWorkspace, RootDemotionPlan, VersioningPolicy, WorkspaceMap, WorkspacePackageMeta};
 pub use status::run_status;
 
 /// BFS transitive closure over a dependency graph.

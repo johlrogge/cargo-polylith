@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use cargo_toml::Manifest;
 
 use super::error::WorkspaceError;
-use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, RootDemotionPlan, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
+use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, RootDemotionPlan, VersioningPolicy, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
 
 type Result<T> = std::result::Result<T, WorkspaceError>;
 
@@ -413,10 +413,33 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
         }
     }
 
+    // Parse [versioning] section — missing section means legacy workspace (both fields None).
+    let (versioning_policy, workspace_version) = if let Some(ver) = doc.get("versioning").and_then(|t| t.as_table()) {
+        let policy = if let Some(policy_str) = ver.get("policy").and_then(|v| v.as_value()).and_then(|v| v.as_str()) {
+            let p = match policy_str {
+                "relaxed" => VersioningPolicy::Relaxed,
+                "strict" => VersioningPolicy::Strict,
+                other => return Err(WorkspaceError::Other(format!(
+                    "unknown versioning policy '{}' in Polylith.toml (expected 'relaxed' or 'strict')",
+                    other
+                ))),
+            };
+            Some(p)
+        } else {
+            None
+        };
+        let version = ver.get("version").and_then(|v| v.as_value()).and_then(|v| v.as_str()).map(|s| s.to_string());
+        (policy, version)
+    } else {
+        (None, None)
+    };
+
     Ok(Some(PolylithToml {
         schema_version,
         libraries,
         profiles,
+        versioning_policy,
+        workspace_version,
     }))
 }
 
@@ -1225,5 +1248,85 @@ mod tests {
         assert_eq!(classify_dep("cli", &map), DepKind::Base("cli"));
         // unknown name
         assert_eq!(classify_dep("nonexistent_crate", &map), DepKind::External);
+    }
+
+    // --- Versioning section tests ---
+
+    /// Missing [versioning] section → both fields None (backward compatible).
+    #[test]
+    fn parse_polylith_toml_no_versioning_section() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path()).unwrap().unwrap();
+        assert!(result.versioning_policy.is_none());
+        assert!(result.workspace_version.is_none());
+    }
+
+    /// [versioning] with policy = "relaxed" parses correctly.
+    #[test]
+    fn parse_polylith_toml_relaxed_policy() {
+        use tempfile::TempDir;
+        use std::fs;
+        use super::super::model::VersioningPolicy;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"relaxed\"\nversion = \"1.0.0\"\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path()).unwrap().unwrap();
+        assert_eq!(result.versioning_policy, Some(VersioningPolicy::Relaxed));
+        assert_eq!(result.workspace_version.as_deref(), Some("1.0.0"));
+    }
+
+    /// [versioning] with policy = "strict" parses correctly.
+    #[test]
+    fn parse_polylith_toml_strict_policy() {
+        use tempfile::TempDir;
+        use std::fs;
+        use super::super::model::VersioningPolicy;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"strict\"\nversion = \"2.3.4\"\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path()).unwrap().unwrap();
+        assert_eq!(result.versioning_policy, Some(VersioningPolicy::Strict));
+        assert_eq!(result.workspace_version.as_deref(), Some("2.3.4"));
+    }
+
+    /// Unknown policy string returns an error.
+    #[test]
+    fn parse_polylith_toml_unknown_policy() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"experimental\"\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path());
+        assert!(result.is_err(), "expected error for unknown policy");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("experimental"), "error should mention the unknown value: {err_msg}");
+    }
+
+    /// [versioning] with version but no policy: version is Some, policy is None.
+    #[test]
+    fn parse_polylith_toml_version_without_policy() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n\n[versioning]\nversion = \"0.5.0\"\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path()).unwrap().unwrap();
+        assert!(result.versioning_policy.is_none());
+        assert_eq!(result.workspace_version.as_deref(), Some("0.5.0"));
     }
 }
