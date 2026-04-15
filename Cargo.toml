@@ -1,6 +1,6 @@
 [package]
 name = "cargo-polylith"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2021"
 description = "Pragmatic polylith architecture tooling for Rust"
 license = "MIT OR Apache-2.0"
@@ -38,6 +38,15 @@ walkdir = "2.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# Semantic versioning
+semver = "1"
+
+# Rust source parsing (for pub API extraction in strict-mode bump)
+syn = { version = "2", features = ["full", "parsing"] }
+
+# Token-stream formatting for syn AST nodes (stable output, no Debug)
+quote = "1"
+
 # TUI (edit command)
 ratatui = "0.30"
 crossterm = "0.29"
@@ -69,6 +78,10 @@ path = "tests/integration/status_test.rs"
 [[test]]
 name = "profile_test"
 path = "tests/integration/profile_test.rs"
+
+[[test]]
+name = "bump_test"
+path = "tests/integration/bump_test.rs"
 
 [dev-dependencies]
 tempfile = "3.10"

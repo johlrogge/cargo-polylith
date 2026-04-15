@@ -91,6 +91,14 @@ pub enum PolylithCommand {
         #[command(subcommand)]
         action: ProfileAction,
     },
+    /// Bump the workspace version
+    Bump {
+        /// Bump level: major, minor, or patch (required in relaxed mode, auto-detected in strict)
+        level: Option<String>,
+        /// Show recommendations without writing changes
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Run a cargo command against a generated profile workspace
     Cargo {
         /// Profile name to activate (defaults to "dev")
@@ -99,6 +107,11 @@ pub enum PolylithCommand {
         /// Cargo subcommand and arguments (e.g. build, test, clippy -- -D warnings)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
+    },
+    /// Generate root Cargo.toml from a named profile (replaces the current root workspace)
+    ChangeProfile {
+        /// Profile name (without .profile extension)
+        name: String,
     },
 }
 
@@ -130,14 +143,6 @@ pub enum ProfileAction {
         /// Output as JSON
         #[arg(long)]
         json: bool,
-    },
-    /// Generate a profile workspace Cargo.toml and build it
-    Build {
-        /// Profile name (without .profile extension)
-        name: String,
-        /// Generate the workspace Cargo.toml but do not invoke cargo build
-        #[arg(long)]
-        no_build: bool,
     },
     /// Add or update an implementation selection in a profile
     Add {

@@ -1,4 +1,5 @@
 pub mod base;
+pub mod bump;
 pub mod error;
 pub mod generate;
 pub mod mcp;

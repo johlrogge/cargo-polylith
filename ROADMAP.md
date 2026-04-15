@@ -2,32 +2,40 @@
 
 ## Shipped
 
-### 0.8.3 — Profile workspaces use symlinks (Option D) ✅
+### 0.9.0 — Profile workspaces generate root Cargo.toml ✅
+
+Supersedes the symlink model (0.8.3). The root `Cargo.toml` IS the workspace; profiles
+generate it directly. LSP/rust-analyzer works naturally because there are no subdirectory
+workspaces or symlinks.
+
+- `cargo polylith change-profile <name>` — writes a new root `Cargo.toml` generated from
+  the named profile; old root `Cargo.toml` is committed or backed up before overwrite.
+- `cargo polylith cargo --profile <name> <subcommand...>` — temporarily swaps the root
+  `Cargo.toml` with a profile-generated one, runs cargo, then restores the original via
+  a Drop guard (cleanup is guaranteed even on panic or error).
+- `cargo polylith profile migrate` — generates root `Cargo.toml` from the dev profile
+  instead of creating a symlinked subdirectory layout.
+- Removed: symlinks, `profiles/<name>/` subdirectory workspaces, `profile build` command.
+
+**Why:** the symlink model (0.8.3) broke editor integration — rust-analyzer and LSP clients
+anchor to the root `Cargo.toml`, so a profile workspace under `profiles/dev/` was invisible
+to the editor. Generating root `Cargo.toml` restores first-class editor support.
+
+### 0.8.3 — Profile workspaces use symlinks (Option D) ✅ (superseded by 0.9.0)
 
 Cargo 1.94+ requires workspace members to be hierarchically below the workspace root,
 making `../../components/foo` member paths in `profiles/dev/Cargo.toml` invalid.
 
-**Solution chosen (Option D):** profile directories contain symlinks that make the root
-brick directories appear below the profile workspace root:
+**Solution (Option D):** profile directories contained symlinks pointing back to the root
+brick directories, and a generated `profiles/dev/Cargo.toml` used clean relative member
+paths through those symlinks. This model is superseded by 0.9.0.
 
-```
-profiles/dev/
-  components -> ../../components   (symlink)
-  bases      -> ../../bases        (symlink)
-  projects   -> ../../projects     (symlink)
-  Cargo.toml                       (generated; members use clean paths: "components/foo")
-```
-
-- `cargo polylith cargo --profile dev check` works correctly with the symlinked layout
-- `cargo polylith profile migrate` now generates the symlinked layout
-- `profile migrate` also strips `{ workspace = true }` from brick `Cargo.toml`s
-- Recommended dev workflow: `cd profiles/dev && cargo check` or `cargo polylith cargo check`
 - `Polylith.toml` introduced as the workspace root marker (library versions, workspace.package metadata)
 
 ### 0.8.1 — `cargo polylith cargo` dev default, `profile migrate` ✅
 
 - `cargo polylith cargo` now defaults `--profile` to `dev` when the flag is omitted. If no dev profile exists, prints: `no dev profile found — run 'cargo polylith profile migrate' to set one up`.
-- `cargo polylith profile migrate [--force]` — migrates a workspace from the traditional "bricks in root workspace members" layout to the profiles-based model: reads `[workspace.dependencies]` interface path deps → writes `profiles/dev.profile` and generates `profiles/dev/Cargo.toml` → clears root `[workspace] members` to `[]`. `--force` overwrites an existing `profiles/dev.profile`. If the workspace is already migrated (members already empty), exits cleanly with a message.
+- `cargo polylith profile migrate [--force]` — migrates a workspace from the traditional "bricks in root workspace members" layout to the profiles-based model: reads `[workspace.dependencies]` interface path deps → writes `profiles/dev.profile` and regenerates the root `Cargo.toml` from the dev profile. `--force` overwrites an existing `profiles/dev.profile`. If the workspace is already migrated, exits cleanly with a message.
 
 Post-migration workflow:
 ```
@@ -40,7 +48,7 @@ cargo polylith cargo --profile production build
 ### 0.8.0 — Profile BFS transitive closure, `cargo polylith cargo` ✅
 
 - `resolve_profile_workspace` now uses BFS transitive closure — only bricks transitively needed by the profile's selected implementations are included in the generated workspace. Alternative implementations of the same interface are excluded, enabling correct component-to-component swapping (e.g. a component that depends on `fact-store = { workspace = true }` — the profile controls which implementation `fact-store` resolves to).
-- `cargo polylith cargo --profile <name> <subcommand...>` — generates the profile workspace and delegates to cargo with `--manifest-path`. Accepts any cargo subcommand and trailing flags:
+- `cargo polylith cargo --profile <name> <subcommand...>` — generates the profile workspace and delegates to cargo against the root workspace. Accepts any cargo subcommand and trailing flags:
   ```
   cargo polylith cargo --profile production build
   cargo polylith cargo --profile dev test
@@ -75,6 +83,30 @@ Profile files (`profiles/<name>.profile`) declare implementation overrides and e
 
 MCP server (`cargo polylith mcp serve`) ✅ — read-only and write tools,
 stdin/stdout JSON-RPC transport, wires directly into Claude Code and other MCP clients.
+
+### Versioning model — relaxed mode ✅
+
+Two-mode versioning configured in `Polylith.toml` (see [ADR-001](docs/adr/001-versioning-model.md)):
+
+- `[versioning]` section added to `Polylith.toml` with `policy` (`relaxed` or `strict`) and `version` fields.
+- `cargo polylith init` writes `policy = "relaxed"` and `version = "0.1.0"` by default.
+- **`cargo polylith bump [major|minor|patch]`** — bumps the workspace version in `Polylith.toml` and the root `Cargo.toml` `[workspace.package]` version. Level argument required in relaxed mode.
+- New `check` warning: `not-workspace-version` — brick not using `version.workspace = true` in a relaxed-mode workspace.
+- MCP write tool: `polylith_bump` — exposes the same bump operation to agents.
+- Generated `Cargo.toml` files now include a `# GENERATED BY cargo-polylith -- DO NOT EDIT` header.
+
+### Versioning model — strict mode analysis ✅
+
+- `policy = "strict"` in `Polylith.toml` activates strict mode.
+- `tag_prefix` option in `[versioning]` controls the git-flow tag prefix used to locate the last release tag (default `v`).
+- **`cargo polylith bump`** in strict mode (level is optional / auto-detected):
+  - Finds the last git-flow release tag via `tag_prefix`
+  - Compares public API surfaces of changed bricks using `syn`
+  - Walks the dependency graph per project and accumulates change signals (API change → major, internal change → minor/patch, transitive-only → patch)
+  - Reports a semver recommendation per project
+- **`--dry-run`** flag — runs full analysis without writing any changes; useful in CI and pre-release review.
+- Strict mode is currently analysis-only: project `Cargo.toml` versions are not written yet (planned next).
+- `polylith_bump` MCP tool updated: `level` is now optional, `dry_run` accepted.
 
 ## Next
 
@@ -185,31 +217,10 @@ Adds file-watching to keep the `WorkspaceMap` live as files change.
 
 Helix is the primary target (no existing Cargo.toml LSP support).
 
-### `polylith_affected_projects` — affected project detection with semver suggestions
+### Strict-mode bump — write per-project versions
 
-Given a git range (`since`..`until`), determines which projects need a version bump
-and what bump level (patch/minor/major) is warranted based on conventional commits.
+The analysis phase of strict-mode `cargo polylith bump` is shipped. The remaining work:
 
-**MCP tool parameters:**
-- `path` (required) — workspace root (must be a git repo)
-- `since` (required) — git ref to compare from (tag, commit, branch)
-- `until` (optional, default `HEAD`)
-
-**Algorithm:**
-1. `git diff --name-only <since>..<until>` → changed files
-2. Map files to components by path prefix (`components/foo_bar/` → `foo-bar`)
-3. For each project: resolve full transitive component dep graph
-4. A project is affected if any transitive dep changed, OR its own `src/` changed
-5. Determine semver bump level from conventional commit messages in range:
-   - `fix:` → patch; `feat:` → minor; `feat!:` / `BREAKING CHANGE:` → major
-   - Mixed: take the highest level across all commits touching affected components
-
-**Output:** table of affected projects with current → suggested version and reason.
-
-**`--apply` mode:** Write suggested versions to each affected project's `Cargo.toml`
-and update matching `void-packages/srcpkgs/*/template` `version=` fields to stay in
-sync with xbps-based deployment pipelines.
-
-**Why high value:** Polylith already owns the dep graph — adding git-range + conventional
-commits makes it a complete release oracle. `--apply` makes version bumping a one-command
-operation across N projects.
+- Write the recommended version to each affected project's `Cargo.toml` (currently analysis-only)
+- Optionally update `void-packages/srcpkgs/*/template` `version=` fields for xbps-based deployment pipelines (`--apply` mode)
+- Expose the per-project analysis as a `polylith_affected_projects` MCP tool, accepting an arbitrary git range (`since`..`until`) rather than requiring a release tag

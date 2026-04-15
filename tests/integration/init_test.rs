@@ -3,6 +3,7 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 
+
 fn cargo_polylith() -> Command {
     Command::cargo_bin("cargo-polylith").unwrap()
 }
@@ -108,4 +109,33 @@ fn init_respects_workspace_root_flag() {
         !other.path().join("components").exists(),
         "components/ must NOT be created in cwd when --workspace-root is given"
     );
+}
+
+#[test]
+fn init_creates_polylith_toml_with_versioning_section() {
+    let dir = TempDir::new().unwrap();
+    run_init(&dir).success();
+
+    let polylith_toml_path = dir.path().join("Polylith.toml");
+    assert!(polylith_toml_path.exists(), "Polylith.toml missing after init");
+
+    let content = fs::read_to_string(&polylith_toml_path).unwrap();
+    assert!(content.contains("[versioning]"), "Polylith.toml missing [versioning] section: {content}");
+    assert!(content.contains("policy"), "Polylith.toml missing versioning policy: {content}");
+    assert!(content.contains("relaxed"), "Polylith.toml should default to relaxed policy: {content}");
+    assert!(content.contains("version"), "Polylith.toml missing workspace version: {content}");
+}
+
+#[test]
+fn init_polylith_toml_is_parseable_by_workspace_parser() {
+    let dir = TempDir::new().unwrap();
+    run_init(&dir).success();
+
+    // Verify the generated Polylith.toml parses correctly with relaxed policy.
+    // We do this by running `info` which reads Polylith.toml — if parse fails, it errors out.
+    cargo_polylith()
+        .args(["polylith", "info"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
 }

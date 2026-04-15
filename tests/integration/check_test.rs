@@ -1,7 +1,8 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command as StdCommand;
 use tempfile::TempDir;
 
 fn cargo_polylith() -> Command {
@@ -1038,4 +1039,158 @@ fn check_profile_impl_not_orphan() {
         is_orphan_kind && mentions_comp
     });
     assert!(!has_orphan, "fact_store_file should not be flagged as orphan when selected by a profile, got: {violations:?}");
+}
+
+// ── version enforcement ────────────────────────────────────────────────────────
+
+fn git_check(dir: &Path, args: &[&str]) {
+    let status = StdCommand::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .status()
+        .unwrap_or_else(|e| panic!("git {args:?} failed to run: {e}"));
+    assert!(status.success(), "git {args:?} exited with {status}");
+}
+
+/// Create a strict-mode polylith workspace with a git repo, one component at version 0.1.0,
+/// an initial commit, and a tag v0.1.0. Returns the TempDir.
+fn setup_strict_workspace_for_check(initial_version: &str) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git_check(root, &["init"]);
+    git_check(root, &["config", "user.email", "test@example.com"]);
+    git_check(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/bar\"]\nresolver = \"2\"\n",
+    ).unwrap();
+    fs::write(
+        root.join("Polylith.toml"),
+        format!(
+            "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"strict\"\nversion = \"{initial_version}\"\n"
+        ),
+    ).unwrap();
+
+    let bar_dir = root.join("components").join("bar");
+    fs::create_dir_all(bar_dir.join("src")).unwrap();
+    fs::write(
+        bar_dir.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"bar\"\nversion = \"{initial_version}\"\nedition = \"2021\"\n\
+             [package.metadata.polylith]\ninterface = \"bar\"\n"
+        ),
+    ).unwrap();
+    fs::write(bar_dir.join("src").join("lib.rs"), "pub fn go() {}\n").unwrap();
+
+    git_check(root, &["add", "."]);
+    git_check(root, &["commit", "-m", "initial commit"]);
+    git_check(root, &["tag", &format!("v{initial_version}")]);
+
+    dir
+}
+
+/// Check emits version-not-bumped when a component is changed without bumping its version.
+/// On a release/ branch this should be a hard error (exit 1).
+#[test]
+fn check_version_enforcement_release_branch_is_error() {
+    let dir = setup_strict_workspace_for_check("0.1.0");
+    let root = dir.path();
+
+    // Switch to a release branch (git-flow convention).
+    git_check(root, &["checkout", "-b", "release/0.2.0"]);
+
+    // Modify the component source without bumping the version.
+    let lib_rs = root.join("components").join("bar").join("src").join("lib.rs");
+    fs::write(&lib_rs, "pub fn go() {}\npub fn stop() {}\n").unwrap();
+
+    git_check(root, &["add", "."]);
+    git_check(root, &["commit", "-m", "feat(bar): add stop fn"]);
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", root.to_str().unwrap(), "check"])
+        .assert()
+        .failure()  // Enforce → hard error → exit 1
+        .stdout(predicate::str::contains("version-not-bumped"));
+}
+
+/// On develop branch, version-not-bumped is a warning only (exit 0).
+#[test]
+fn check_version_enforcement_develop_branch_is_warning() {
+    let dir = setup_strict_workspace_for_check("0.1.0");
+    let root = dir.path();
+
+    // Switch to develop branch.
+    git_check(root, &["checkout", "-b", "develop"]);
+
+    // Modify the component without bumping the version.
+    let lib_rs = root.join("components").join("bar").join("src").join("lib.rs");
+    fs::write(&lib_rs, "pub fn go() {}\npub fn extra() {}\n").unwrap();
+
+    git_check(root, &["add", "."]);
+    git_check(root, &["commit", "-m", "feat(bar): add extra fn"]);
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", root.to_str().unwrap(), "check"])
+        .assert()
+        .success()  // Warn → exit 0
+        .stdout(predicate::str::contains("version-not-bumped"));
+}
+
+/// On a feature/ branch, version checks are skipped entirely.
+#[test]
+fn check_version_enforcement_feature_branch_is_skip() {
+    let dir = setup_strict_workspace_for_check("0.1.0");
+    let root = dir.path();
+
+    // Switch to a feature branch.
+    git_check(root, &["checkout", "-b", "feature/my-work"]);
+
+    // Modify the component without bumping the version.
+    let lib_rs = root.join("components").join("bar").join("src").join("lib.rs");
+    fs::write(&lib_rs, "pub fn go() {}\npub fn feature_work() {}\n").unwrap();
+
+    git_check(root, &["add", "."]);
+    git_check(root, &["commit", "-m", "feat(bar): wip"]);
+
+    // No violation — feature branches skip version checks.
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", root.to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("version-not-bumped").not());
+}
+
+/// If the version is bumped along with the code change, no violation is emitted.
+#[test]
+fn check_version_enforcement_bumped_version_no_violation() {
+    let dir = setup_strict_workspace_for_check("0.1.0");
+    let root = dir.path();
+
+    git_check(root, &["checkout", "-b", "release/0.2.0"]);
+
+    // Modify the component AND bump the version.
+    let lib_rs = root.join("components").join("bar").join("src").join("lib.rs");
+    fs::write(&lib_rs, "pub fn go() {}\npub fn stop() {}\n").unwrap();
+
+    let cargo_toml = root.join("components").join("bar").join("Cargo.toml");
+    fs::write(
+        &cargo_toml,
+        "[package]\nname = \"bar\"\nversion = \"0.2.0\"\nedition = \"2021\"\n\
+         [package.metadata.polylith]\ninterface = \"bar\"\n",
+    ).unwrap();
+
+    git_check(root, &["add", "."]);
+    git_check(root, &["commit", "-m", "feat(bar): add stop fn; bump version"]);
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", root.to_str().unwrap(), "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("version-not-bumped").not());
 }

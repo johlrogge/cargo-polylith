@@ -147,73 +147,6 @@ fn check_with_missing_profile_errors() {
 }
 
 #[test]
-fn profile_build_no_build_generates_cargo_toml() {
-    use tempfile::TempDir;
-    use std::fs;
-
-    // Copy fixture to a temp dir so we can write to it
-    let tmp = TempDir::new().unwrap();
-    let fixture = fixture_root();
-
-    // Copy fixture structure
-    let copy_file = |rel: &str| {
-        let src = fixture.join(rel);
-        let dst = tmp.path().join(rel);
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        if src.exists() {
-            fs::copy(&src, &dst).unwrap();
-        }
-    };
-
-    copy_file("Cargo.toml");
-    copy_file("components/logger/Cargo.toml");
-    copy_file("components/logger/src/lib.rs");
-    copy_file("components/logger/src/logger.rs");
-    copy_file("components/parser/Cargo.toml");
-    copy_file("components/parser/src/lib.rs");
-    copy_file("components/parser/src/parser.rs");
-    copy_file("bases/cli/Cargo.toml");
-    copy_file("bases/cli/src/lib.rs");
-    copy_file("projects/main-project/Cargo.toml");
-    copy_file("projects/main-project/src/main.rs");
-    copy_file("profiles/dev.profile");
-
-    cargo_polylith()
-        .args([
-            "polylith",
-            "--workspace-root",
-            tmp.path().to_str().unwrap(),
-            "profile",
-            "build",
-            "dev",
-            "--no-build",
-        ])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("Generated"));
-
-    // Verify the generated file exists
-    let generated = tmp.path().join("profiles/dev/Cargo.toml");
-    assert!(generated.exists(), "profiles/dev/Cargo.toml should have been generated");
-
-    let content = fs::read_to_string(&generated).unwrap();
-    assert!(content.contains("[workspace]"), "should have [workspace] section");
-    assert!(content.contains("\"components/logger\""), "should have logger member with symlink-relative path");
-    assert!(content.contains("\"components/parser\""), "should have parser member with symlink-relative path");
-    assert!(!content.contains("../../"), "should not contain ../../ paths — symlinks make them unnecessary");
-
-    // Verify symlinks were created
-    let components_link = tmp.path().join("profiles/dev/components");
-    assert!(components_link.is_symlink(), "profiles/dev/components should be a symlink");
-    let bases_link = tmp.path().join("profiles/dev/bases");
-    assert!(bases_link.is_symlink(), "profiles/dev/bases should be a symlink");
-    let projects_link = tmp.path().join("profiles/dev/projects");
-    assert!(projects_link.is_symlink(), "profiles/dev/projects should be a symlink");
-}
-
-#[test]
 fn profile_cargo_defaults_to_dev_hints_migrate_when_missing() {
     use tempfile::TempDir;
     use std::fs;
@@ -354,11 +287,16 @@ logger = { path = "components/logger" }
     assert!(profile_content.contains("logger"), "should contain logger entry.\ncontent:\n{profile_content}");
     assert!(profile_content.contains("components/logger"), "should contain impl path.\ncontent:\n{profile_content}");
 
-    // After migration, [workspace] should be removed from root Cargo.toml entirely.
+    // After migration, root Cargo.toml should be regenerated from the dev profile and
+    // still contain [workspace] (now managed by the profile, not manually).
     let root_content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
     assert!(
-        !root_content.contains("[workspace"),
-        "root Cargo.toml should have no [workspace] section after migration.\ncontent:\n{root_content}"
+        root_content.contains("[workspace]"),
+        "root Cargo.toml should have [workspace] section after migration (regenerated from profile).\ncontent:\n{root_content}"
+    );
+    assert!(
+        root_content.contains("components/logger"),
+        "root Cargo.toml should have logger as a workspace member.\ncontent:\n{root_content}"
     );
 
     // Polylith.toml should have been created
@@ -527,12 +465,17 @@ fn profile_migrate_generates_profile_workspace() {
         .assert()
         .success();
 
-    // profiles/dev/Cargo.toml should have been generated
-    let generated = tmp.path().join("profiles/dev/Cargo.toml");
-    assert!(generated.exists(), "profiles/dev/Cargo.toml should have been generated");
+    // Root Cargo.toml should have been regenerated from the dev profile (no separate profiles/dev/ dir)
+    let root_cargo = tmp.path().join("Cargo.toml");
+    assert!(root_cargo.exists(), "root Cargo.toml should still exist");
 
-    let content = fs::read_to_string(&generated).unwrap();
-    assert!(content.contains("[workspace]"), "should have [workspace] section");
+    let content = fs::read_to_string(&root_cargo).unwrap();
+    assert!(content.contains("[workspace]"), "root Cargo.toml should have [workspace] section after migration");
+    // Should reference workspace members (bricks from fixture)
+    assert!(
+        content.contains("components/") || content.contains("bases/") || content.contains("projects/"),
+        "root Cargo.toml should reference workspace members.\ncontent:\n{content}"
+    );
 }
 
 #[test]
@@ -590,82 +533,20 @@ serde = { version = "1", features = ["derive"] }
     assert!(polylith_content.contains("[profiles]"), "should have [profiles] section");
     assert!(polylith_content.contains("dev"), "should have dev profile entry");
 
-    // Root Cargo.toml should no longer contain [workspace] but should have [package] with metadata
+    // Root Cargo.toml should be regenerated from profile and still have [workspace],
+    // with [workspace.package] carrying the metadata.
     let root_content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
     assert!(
-        !root_content.contains("[workspace"),
-        "root Cargo.toml should have no [workspace] section after migration.\ncontent:\n{root_content}"
+        root_content.contains("[workspace]"),
+        "root Cargo.toml should have [workspace] section after migration (regenerated from profile).\ncontent:\n{root_content}"
     );
     assert!(
         root_content.contains("version = \"0.1.0\""),
-        "root Cargo.toml [package] should have version from workspace.package.\ncontent:\n{root_content}"
+        "root Cargo.toml [workspace.package] should have version from original workspace.package.\ncontent:\n{root_content}"
     );
     assert!(
         root_content.contains("edition = \"2021\""),
-        "root Cargo.toml [package] should have edition from workspace.package.\ncontent:\n{root_content}"
-    );
-}
-
-#[test]
-fn profile_workspace_has_symlinks() {
-    use tempfile::TempDir;
-    use std::fs;
-
-    let tmp = TempDir::new().unwrap();
-    let fixture = fixture_root();
-
-    let copy_file = |rel: &str| {
-        let src = fixture.join(rel);
-        let dst = tmp.path().join(rel);
-        if let Some(parent) = dst.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        if src.exists() {
-            fs::copy(&src, &dst).unwrap();
-        }
-    };
-
-    copy_file("Cargo.toml");
-    copy_file("components/logger/Cargo.toml");
-    copy_file("components/logger/src/lib.rs");
-    copy_file("components/logger/src/logger.rs");
-    copy_file("components/parser/Cargo.toml");
-    copy_file("components/parser/src/lib.rs");
-    copy_file("components/parser/src/parser.rs");
-    copy_file("bases/cli/Cargo.toml");
-    copy_file("bases/cli/src/lib.rs");
-    copy_file("projects/main-project/Cargo.toml");
-    copy_file("projects/main-project/src/main.rs");
-    copy_file("profiles/dev.profile");
-
-    cargo_polylith()
-        .args([
-            "polylith",
-            "--workspace-root",
-            tmp.path().to_str().unwrap(),
-            "profile",
-            "build",
-            "dev",
-            "--no-build",
-        ])
-        .assert()
-        .success();
-
-    // profiles/dev/components, bases, projects must all be symlinks
-    let components_link = tmp.path().join("profiles/dev/components");
-    assert!(
-        components_link.is_symlink(),
-        "profiles/dev/components should be a symlink after profile build"
-    );
-    let bases_link = tmp.path().join("profiles/dev/bases");
-    assert!(
-        bases_link.is_symlink(),
-        "profiles/dev/bases should be a symlink after profile build"
-    );
-    let projects_link = tmp.path().join("profiles/dev/projects");
-    assert!(
-        projects_link.is_symlink(),
-        "profiles/dev/projects should be a symlink after profile build"
+        "root Cargo.toml [workspace.package] should have edition from original workspace.package.\ncontent:\n{root_content}"
     );
 }
 
@@ -919,7 +800,7 @@ serde = { workspace = true }
 }
 
 #[test]
-fn profile_workspace_member_paths_are_relative_to_profile_root() {
+fn change_profile_generates_root_cargo_toml() {
     use tempfile::TempDir;
     use std::fs;
 
@@ -955,31 +836,262 @@ fn profile_workspace_member_paths_are_relative_to_profile_root() {
             "polylith",
             "--workspace-root",
             tmp.path().to_str().unwrap(),
-            "profile",
-            "build",
+            "change-profile",
             "dev",
-            "--no-build",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Generated"));
+
+    // The root Cargo.toml should have been overwritten
+    let root_cargo = tmp.path().join("Cargo.toml");
+    let content = fs::read_to_string(&root_cargo).unwrap();
+    assert!(content.contains("[workspace]"), "root Cargo.toml should have [workspace] section");
+    assert!(
+        content.contains("\"components/logger\""),
+        "root Cargo.toml should contain logger member.\ncontent:\n{content}"
+    );
+    assert!(
+        content.contains("\"components/parser\""),
+        "root Cargo.toml should contain parser member.\ncontent:\n{content}"
+    );
+    // No profile subdirectory should have been created
+    assert!(
+        !tmp.path().join("profiles/dev/Cargo.toml").exists(),
+        "change-profile should NOT create profiles/dev/Cargo.toml"
+    );
+}
+
+#[test]
+fn change_profile_generated_header_is_present() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    let fixture = fixture_root();
+
+    let copy_file = |rel: &str| {
+        let src = fixture.join(rel);
+        let dst = tmp.path().join(rel);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        if src.exists() {
+            fs::copy(&src, &dst).unwrap();
+        }
+    };
+
+    copy_file("Cargo.toml");
+    copy_file("components/logger/Cargo.toml");
+    copy_file("components/logger/src/lib.rs");
+    copy_file("components/logger/src/logger.rs");
+    copy_file("components/parser/Cargo.toml");
+    copy_file("components/parser/src/lib.rs");
+    copy_file("components/parser/src/parser.rs");
+    copy_file("bases/cli/Cargo.toml");
+    copy_file("bases/cli/src/lib.rs");
+    copy_file("projects/main-project/Cargo.toml");
+    copy_file("projects/main-project/src/main.rs");
+    copy_file("profiles/dev.profile");
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "change-profile",
+            "dev",
         ])
         .assert()
         .success();
 
-    let generated = tmp.path().join("profiles/dev/Cargo.toml");
-    let content = fs::read_to_string(&generated).unwrap();
+    let content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
+    assert!(
+        content.contains("# GENERATED BY cargo-polylith -- DO NOT EDIT"),
+        "root Cargo.toml should contain the generated header.\ncontent:\n{content}"
+    );
+    assert!(
+        content.contains("# Source: profiles/dev.profile"),
+        "root Cargo.toml should reference source profile.\ncontent:\n{content}"
+    );
+}
 
-    // Member paths must NOT start with ../../ — they are relative to the profile
-    // workspace root and resolved via symlinks.
+#[test]
+fn change_profile_errors_on_nonexistent_profile() {
+    let fixture = fixture_root();
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            fixture.to_str().unwrap(),
+            "change-profile",
+            "nonexistent-profile",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nonexistent-profile"));
+}
+
+#[test]
+fn change_profile_writes_root_relative_member_paths() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    let fixture = fixture_root();
+
+    let copy_file = |rel: &str| {
+        let src = fixture.join(rel);
+        let dst = tmp.path().join(rel);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        if src.exists() {
+            fs::copy(&src, &dst).unwrap();
+        }
+    };
+
+    copy_file("Cargo.toml");
+    copy_file("components/logger/Cargo.toml");
+    copy_file("components/logger/src/lib.rs");
+    copy_file("components/logger/src/logger.rs");
+    copy_file("components/parser/Cargo.toml");
+    copy_file("components/parser/src/lib.rs");
+    copy_file("components/parser/src/parser.rs");
+    copy_file("bases/cli/Cargo.toml");
+    copy_file("bases/cli/src/lib.rs");
+    copy_file("projects/main-project/Cargo.toml");
+    copy_file("projects/main-project/src/main.rs");
+    copy_file("profiles/dev.profile");
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "change-profile",
+            "dev",
+        ])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
+    // Paths should be root-relative — no ../../ indirection
     assert!(
         !content.contains("../../"),
-        "generated Cargo.toml must not contain ../../ paths — use symlink-relative paths instead.\ncontent:\n{content}"
+        "member paths should not contain ../../.\ncontent:\n{content}"
     );
+    assert!(
+        content.contains("resolver = \"2\""),
+        "root Cargo.toml should have resolver = \"2\".\ncontent:\n{content}"
+    );
+}
 
-    // Member paths should use the symlink-relative form
-    assert!(
-        content.contains("\"components/"),
-        "member paths should start with components/ not ../../components/.\ncontent:\n{content}"
+#[test]
+fn profile_cargo_restores_root_cargo_toml_after_run() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    let fixture = fixture_root();
+
+    let copy_file = |rel: &str| {
+        let src = fixture.join(rel);
+        let dst = tmp.path().join(rel);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        if src.exists() {
+            fs::copy(&src, &dst).unwrap();
+        }
+    };
+
+    copy_file("Cargo.toml");
+    copy_file("components/logger/Cargo.toml");
+    copy_file("components/logger/src/lib.rs");
+    copy_file("components/logger/src/logger.rs");
+    copy_file("components/parser/Cargo.toml");
+    copy_file("components/parser/src/lib.rs");
+    copy_file("components/parser/src/parser.rs");
+    copy_file("bases/cli/Cargo.toml");
+    copy_file("bases/cli/src/lib.rs");
+    copy_file("projects/main-project/Cargo.toml");
+    copy_file("projects/main-project/src/main.rs");
+    copy_file("profiles/dev.profile");
+
+    let original_content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
+
+    // Run `cargo polylith cargo version` — a fast cargo subcommand that always succeeds
+    let _output = cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "cargo",
+            "version",
+        ])
+        .output()
+        .unwrap();
+
+    // Root Cargo.toml must be restored to original content regardless of cargo outcome
+    let restored_content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
+    assert_eq!(
+        original_content, restored_content,
+        "root Cargo.toml should be restored to original after `cargo polylith cargo` completes"
     );
-    assert!(
-        content.contains("\"bases/"),
-        "member paths should start with bases/ not ../../bases/.\ncontent:\n{content}"
+}
+
+#[test]
+fn profile_cargo_restores_root_cargo_toml_on_cargo_failure() {
+    use tempfile::TempDir;
+    use std::fs;
+
+    let tmp = TempDir::new().unwrap();
+    let fixture = fixture_root();
+
+    let copy_file = |rel: &str| {
+        let src = fixture.join(rel);
+        let dst = tmp.path().join(rel);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        if src.exists() {
+            fs::copy(&src, &dst).unwrap();
+        }
+    };
+
+    copy_file("Cargo.toml");
+    copy_file("components/logger/Cargo.toml");
+    copy_file("components/logger/src/lib.rs");
+    copy_file("components/logger/src/logger.rs");
+    copy_file("components/parser/Cargo.toml");
+    copy_file("components/parser/src/lib.rs");
+    copy_file("components/parser/src/parser.rs");
+    copy_file("bases/cli/Cargo.toml");
+    copy_file("bases/cli/src/lib.rs");
+    copy_file("projects/main-project/Cargo.toml");
+    copy_file("projects/main-project/src/main.rs");
+    copy_file("profiles/dev.profile");
+
+    let original_content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
+
+    // Run `cargo polylith cargo this-subcommand-does-not-exist` — cargo will fail
+    let _output = cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            tmp.path().to_str().unwrap(),
+            "cargo",
+            "this-subcommand-does-not-exist",
+        ])
+        .output()
+        .unwrap();
+
+    // Root Cargo.toml must be restored to original content even after cargo failure
+    let restored_content = fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap();
+    assert_eq!(
+        original_content, restored_content,
+        "root Cargo.toml should be restored to original even when cargo fails"
     );
 }

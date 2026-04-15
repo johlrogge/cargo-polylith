@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use crate::commands::validate::validate_brick_name;
 use crate::scaffold;
 use crate::workspace::{build_workspace_map, classify_dep, discover_profiles, resolve_root, run_checks, run_status, DepKind};
+use crate::commands::bump as bump_cmd;
 
 pub fn serve(workspace_root: Option<&Path>, write: bool) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -186,6 +187,24 @@ fn tools_list(id: Value, write: bool) -> Value {
                 "description": "Migrate [workspace.package] metadata from Polylith.toml to root Cargo.toml [package]",
                 "inputSchema": { "type": "object", "properties": {} }
             }),
+            json!({
+                "name": "polylith_bump",
+                "description": "Bump the workspace version. In relaxed mode, `level` is required. In strict mode, level is auto-detected from the dependency graph.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "level": {
+                            "type": "string",
+                            "enum": ["major", "minor", "patch"],
+                            "description": "Bump level: major, minor, or patch (required for relaxed mode)"
+                        },
+                        "dry_run": {
+                            "type": "boolean",
+                            "description": "Show recommendations without writing changes (strict mode only)"
+                        }
+                    }
+                }
+            }),
         ]);
     }
 
@@ -341,7 +360,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
         "polylith_component_new" | "polylith_base_new" | "polylith_project_new"
         | "polylith_component_update"
         | "polylith_profile_new" | "polylith_profile_add" | "polylith_base_update"
-        | "polylith_migrate_package_meta"
+        | "polylith_migrate_package_meta" | "polylith_bump"
             if !write =>
         {
             Err(jsonrpc_error(
@@ -488,6 +507,42 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
         "polylith_migrate_package_meta" => {
             match scaffold::migrate_package_meta_to_cargo_toml(root) {
                 Ok(msg) => Ok(msg),
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
+            }
+        }
+
+        "polylith_bump" => {
+            let level = arguments.get("level").and_then(|v| v.as_str());
+            let dry_run = arguments.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+            match bump_cmd::run(level, Some(root), dry_run) {
+                Ok(bump_cmd::BumpResult::Relaxed { old, new }) => {
+                    Ok(format!("bumped workspace version: {old} -> {new}"))
+                }
+                Ok(bump_cmd::BumpResult::Strict { recommendations, no_prior_tag }) => {
+                    let note = if no_prior_tag {
+                        " (no prior release tag; all bricks treated as new)"
+                    } else {
+                        ""
+                    };
+                    let recs: Vec<_> = recommendations
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "project": r.project_name,
+                                "current_version": r.current_version,
+                                "recommended_level": r.recommended_level.map(|l| format!("{l:?}").to_lowercase()),
+                                "recommended_version": r.recommended_version,
+                                "worst_severity": r.worst_severity.as_str(),
+                                "changed_bricks": r.changed_bricks,
+                            })
+                        })
+                        .collect();
+                    Ok(format!(
+                        "strict bump analysis{note}:\n{}",
+                        serde_json::to_string_pretty(&serde_json::json!({ "recommendations": recs }))
+                            .unwrap_or_else(|e| e.to_string())
+                    ))
+                }
                 Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }

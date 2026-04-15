@@ -3,6 +3,16 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+/// Versioning policy for the polylith workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VersioningPolicy {
+    /// All brick versions equal the workspace version.
+    Relaxed,
+    /// Every brick owns its version in its own `Cargo.toml`.
+    Strict,
+}
+
 /// Shared package metadata from root `Cargo.toml` `[package]`.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspacePackageMeta {
@@ -20,6 +30,12 @@ pub struct PolylithToml {
     pub libraries: HashMap<String, ExternalDepInfo>,
     /// Maps profile name → relative path to `.profile` file.
     pub profiles: HashMap<String, String>,
+    /// Versioning policy from `[versioning] policy`. `None` means legacy workspace (not configured).
+    pub versioning_policy: Option<VersioningPolicy>,
+    /// Workspace/distro version from `[versioning] version`. `None` means legacy workspace (not configured).
+    pub workspace_version: Option<String>,
+    /// Tag prefix from `[versioning] tag_prefix`. `None` means not configured.
+    pub tag_prefix: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -138,10 +154,11 @@ pub struct WorkspaceMap {
 }
 
 /// Plan produced by analysing the root workspace before migration.
-/// Computed by `workspace::plan_root_demotion`; consumed by `scaffold::execute_root_demotion`.
+/// Computed by `workspace::plan_root_demotion`; consumed by `scaffold::write_polylith_toml`.
 #[derive(Debug, Clone)]
 pub struct RootDemotionPlan {
-    /// Transient carrier: extracted from old [workspace.package], written into root Cargo.toml [package]
+    /// Workspace package metadata extracted from `[workspace.package]` in root `Cargo.toml`.
+    /// Used by `strip_workspace_inheritance` to resolve `version.workspace = true` etc in bricks.
     pub workspace_package: Option<WorkspacePackageMeta>,
     /// External (non-path) library deps for Polylith.toml [libraries].
     /// Each entry has `raw` populated for verbatim TOML rendering.
@@ -151,15 +168,15 @@ pub struct RootDemotionPlan {
 }
 
 /// The fully resolved data needed to generate a profile workspace Cargo.toml.
-/// Computed by `workspace::resolve_profile_workspace`; consumed by `scaffold::write_profile_workspace`.
+/// Computed by `workspace::resolve_profile_workspace`; consumed by `scaffold::write_root_workspace_from_profile`.
 #[derive(Debug, Clone)]
 pub struct ResolvedProfileWorkspace {
     /// Profile name (used for the output path and header comment).
     pub profile_name: String,
-    /// Workspace members as paths relative to the profile directory.
+    /// Workspace members as paths relative to the workspace root.
     pub members: Vec<String>,
     /// Interface (path) dep lines, fully rendered for [workspace.dependencies].
-    /// Each entry is a TOML line like: `foo = { path = "../../components/foo" }`
+    /// Each entry is a TOML line like: `foo = { path = "components/foo" }`
     pub interface_dep_lines: Vec<String>,
     /// Library dep lines, fully rendered for [workspace.dependencies].
     pub library_dep_lines: Vec<String>,

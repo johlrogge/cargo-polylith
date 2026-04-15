@@ -34,9 +34,9 @@ values, but we do not use them as an excuse to abandon Polylith's architectural 
   project builds everything in one pass.
 - **Bricks are the unit of development and reuse, not libraries.** A component is not a
   published crate — it is a named, swappable piece of functionality.
-- **No semantic versioning between bricks.** Internal bricks use `path = "..."` dependencies.
-  Semver applies only at the project boundary when consuming external crates. Components are
-  never individually published to crates.io.
+- **No version coupling between bricks.** Internal bricks use `path = "..."` dependencies —
+  no brick ever references another brick's version number. Brick version fields exist because
+  Cargo requires them; they are internal bookkeeping, not compatibility contracts.
 - **Bricks depend on interfaces.** Components and bases may depend on other components, but
   they do so by referencing the interface (crate name), never a specific implementation.
   Projects select which implementation is active via path dependencies aliased to the interface name.
@@ -45,22 +45,39 @@ values, but we do not use them as an excuse to abandon Polylith's architectural 
 
 ---
 
-## Semantic versioning stance
+## Versioning stance
 
 Polylith explicitly rejects per-component versioning
 ([reference](https://polylith.gitbook.io/polylith/architecture/2.4-libraries)).
 Components at HEAD are coherent with each other by definition; independent versions would
 create the very coupling the architecture is designed to avoid.
 
-cargo-polylith adopts the same position:
+cargo-polylith respects this principle while acknowledging a Rust/Cargo reality: every
+`Cargo.toml` *must* declare a version. Rather than fighting Cargo's requirement, we find
+value in both models:
 
 - Internal bricks always declare `path = "..."` dependencies — never a crates.io version.
 - Components are never individually published to crates.io.
-- Semver applies only when the workspace consumes external crates.
-- The workspace as a whole carries a version (for releasing the tool or a library surface).
+- The workspace as a whole carries a **distro version** — the release of the bundle,
+  analogous to a Linux distribution release.
 
-This is a deliberate alignment with Polylith, not a Cargo limitation. Cargo supports path
-dependencies natively; we choose them for bricks.
+Two versioning modes let teams choose the level of discipline that fits their needs:
+
+- **Relaxed** (default): All bricks share the workspace version via `version.workspace = true`.
+  One version, one number, zero friction. This is the closest alignment with Polylith's
+  original stance — brick versions exist only because Cargo demands them.
+- **Strict**: Each brick owns its version as a **change-tracking signal** — not as a
+  published API contract or inter-brick compatibility promise. Brick versions record
+  the *kind* of change (patch, minor, major) during development. At release time,
+  `cargo polylith bump` walks the dependency graph and computes a per-project semver
+  recommendation from these accumulated signals.
+
+The strict mode is a humble deviation (see guiding principle above): Cargo forces a version
+field to exist, and Rust's `pub` surface gives us a precise definition of "interface change"
+via AST comparison. We use these Rust-native affordances to turn a mandatory field into
+useful information, without introducing inter-brick coupling or publishing.
+
+See [ADR-001](docs/adr/001-versioning-model.md) for the full design.
 
 ---
 

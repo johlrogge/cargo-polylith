@@ -1,12 +1,12 @@
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
 use crate::commands::validate::validate_brick_name;
 use crate::commands::CommandError;
 use crate::output::table;
-use crate::workspace::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, read_root_package_meta, resolve_profile_workspace, resolve_root};
+use crate::workspace::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, resolve_profile_workspace, resolve_root};
 
 pub fn list(json: bool, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -17,36 +17,6 @@ pub fn list(json: bool, workspace_root: Option<&Path>) -> Result<()> {
     } else {
         table::print_profiles(&profiles);
     }
-    Ok(())
-}
-
-pub fn build(name: &str, no_build: bool, workspace_root: Option<&Path>) -> Result<()> {
-    eprintln!("warning: `profile build` is deprecated — use `cargo polylith cargo --profile {} build` instead.", name);
-    let cwd = env::current_dir()?;
-    let root = resolve_root(&cwd, workspace_root)?;
-    let map = build_workspace_map(&root)?;
-    let profiles = discover_profiles(&root)?;
-    let profile = profiles
-        .into_iter()
-        .find(|p| p.name == name)
-        .with_context(|| format!("profile '{}' not found in profiles/", name))?;
-
-    let resolved = resolve_profile_workspace(&root, &profile, &map);
-    let generated = crate::scaffold::write_profile_workspace(&root, &resolved)?;
-    eprintln!("Generated {}", generated.display());
-
-    if !no_build {
-        let status = std::process::Command::new("cargo")
-            .arg("build")
-            .arg("--manifest-path")
-            .arg(&generated)
-            .status()
-            .context("failed to invoke cargo build")?;
-        if !status.success() {
-            anyhow::bail!("cargo build failed");
-        }
-    }
-
     Ok(())
 }
 
@@ -110,36 +80,32 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
     crate::scaffold::create_dev_profile_from_deps(&root, &impl_pairs)?;
     eprintln!("Created profiles/dev.profile");
 
-    // Demote root workspace: read/analyse phase (workspace module), then write phase (scaffold module).
+    // Write Polylith.toml: read/analyse phase (workspace module), then write phase (scaffold module).
     // Must happen before profile workspace generation so [workspace.package] is available.
     let demotion_plan = plan_root_demotion(&root)?;
-    crate::scaffold::execute_root_demotion(&root, &demotion_plan)?;
+    crate::scaffold::write_polylith_toml(&root, &demotion_plan)?;
     eprintln!("Created Polylith.toml");
-    eprintln!("Removed [workspace] from root Cargo.toml");
 
-    // Strip { workspace = true } from all brick Cargo.tomls
     let polylith_toml = crate::workspace::read_polylith_toml(&root)?;
-    let root_pkg_meta = read_root_package_meta(&root)?;
-    let stripped_count = crate::scaffold::strip_workspace_inheritance(&root, &polylith_toml, &impl_pairs, root_pkg_meta.as_ref())?;
+    let stripped_count = crate::scaffold::strip_workspace_inheritance(&root, &polylith_toml, demotion_plan.workspace_package.as_ref())?;
     if stripped_count > 0 {
         eprintln!("Stripped workspace inheritance from {} brick(s)", stripped_count);
     }
 
-    // Phase 2: now that Polylith.toml has been written and the root workspace demoted,
-    // build the full WorkspaceMap.  This second build is intentional and necessary:
-    // resolve_profile_workspace needs workspace_package from PolylithToml (which only
-    // exists after execute_root_demotion above writes Polylith.toml), so we cannot
-    // reuse the Phase 1 result here.
+    // Phase 2: now that Polylith.toml has been written, build the full WorkspaceMap.
+    // This second build is intentional and necessary: resolve_profile_workspace needs
+    // workspace_package from PolylithToml (which only exists after write_polylith_toml
+    // above), so we cannot reuse the Phase 1 result here.
     let map = build_workspace_map(&root)?;
 
-    // Discover the newly written profile and resolve + write the profile workspace
+    // Discover the newly written profile and resolve + regenerate root Cargo.toml from it
     let profiles = discover_profiles(&root)?;
     let dev_profile = profiles
         .into_iter()
         .find(|p| p.name == "dev")
         .context("dev profile not found after creation")?;
     let resolved = resolve_profile_workspace(&root, &dev_profile, &map);
-    let generated = crate::scaffold::write_profile_workspace(&root, &resolved)?;
+    let generated = crate::scaffold::write_root_workspace_from_profile(&root, &resolved)?;
     eprintln!("Generated {}", generated.display());
 
     // Print summary
@@ -162,24 +128,55 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
         }
     }
     println!();
-    println!("  Polylith.toml written — workspace metadata and library versions moved there.");
-    println!("  [workspace] removed from root Cargo.toml.");
-    println!("  Root workspace members cleared (previously managed components/bases/projects");
-    println!("  are now referenced via the generated profile workspace with symlinks).");
+    println!("  Polylith.toml written — library versions and workspace metadata stored there.");
+    println!("  Root Cargo.toml regenerated from profiles/dev.profile.");
     println!();
     println!("New workflow:");
     println!("  cargo polylith cargo build                    # build with dev profile (default)");
     println!("  cargo polylith cargo test                     # test with dev profile");
     println!("  cargo polylith cargo --profile <name> build   # build with a named profile");
     println!();
-    println!("  Alternatively, navigate directly into the profile workspace:");
-    println!("    cd profiles/dev && cargo build");
+    println!("  To switch active profile, use:");
+    println!("    cargo polylith profile change-profile <name>");
     println!();
-    println!("  Note: bricks use `{{ workspace = true }}` deps which resolve via the profile");
-    println!("  workspace's [workspace.dependencies]. Running cargo from the root is no");
-    println!("  longer supported — always use the profile workspace.");
+    println!("  Run `cargo build` or `cargo polylith cargo build` to build.");
+    println!("  Note: bricks use `{{ workspace = true }}` deps which resolve via the root");
+    println!("  workspace's [workspace.dependencies]. The root Cargo.toml is regenerated");
+    println!("  from the active profile when running `cargo polylith cargo`.");
 
     Ok(())
+}
+
+pub fn change_profile(name: &str, workspace_root: Option<&Path>) -> Result<()> {
+    let cwd = env::current_dir()?;
+    let root = resolve_root(&cwd, workspace_root)?;
+    let map = build_workspace_map(&root)?;
+    let profiles = discover_profiles(&root)?;
+    let profile = profiles
+        .into_iter()
+        .find(|p| p.name == name)
+        .with_context(|| format!("profile '{}' not found in profiles/", name))?;
+
+    let resolved = resolve_profile_workspace(&root, &profile, &map);
+    let generated = crate::scaffold::write_root_workspace_from_profile(&root, &resolved)?;
+    println!("Generated {}", generated.display());
+
+    Ok(())
+}
+
+/// RAII guard that restores the root `Cargo.toml` to its original content
+/// when dropped. This ensures cleanup happens even if cargo fails or panics.
+struct CargoTomlGuard {
+    path: PathBuf,
+    backup: String,
+}
+
+impl Drop for CargoTomlGuard {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::write(&self.path, &self.backup) {
+            eprintln!("warning: failed to restore {}: {}", self.path.display(), e);
+        }
+    }
 }
 
 pub fn run_cargo(profile_name: &str, cargo_args: &[String], workspace_root: Option<&Path>) -> Result<()> {
@@ -198,21 +195,27 @@ pub fn run_cargo(profile_name: &str, cargo_args: &[String], workspace_root: Opti
             }
         })?;
 
+    // Back up the root Cargo.toml so we can restore it after the cargo run
+    let cargo_toml_path = root.join("Cargo.toml");
+    let backup = std::fs::read_to_string(&cargo_toml_path)
+        .with_context(|| format!("failed to read {}", cargo_toml_path.display()))?;
+    let _guard = CargoTomlGuard { path: cargo_toml_path, backup };
+
     let resolved = resolve_profile_workspace(&root, &profile, &map);
-    let generated = crate::scaffold::write_profile_workspace(&root, &resolved)?;
+    let generated = crate::scaffold::write_root_workspace_from_profile(&root, &resolved)?;
     eprintln!("Generated {}", generated.display());
 
-    // Place --manifest-path after the subcommand name so cargo sees it as a
-    // per-subcommand option (not a global flag), and before the remaining args
-    // so that `--` in user args is not misinterpreted.
+    if cargo_args.is_empty() {
+        anyhow::bail!("no cargo subcommand specified");
+    }
     let (subcommand, rest) = cargo_args.split_first().map(|(s, r)| (s.as_str(), r)).unwrap_or(("", &[]));
     let status = std::process::Command::new("cargo")
         .arg(subcommand)
-        .arg("--manifest-path")
-        .arg(&generated)
         .args(rest)
         .status()
         .context("failed to invoke cargo")?;
+
+    // _guard is dropped here (and also on early return/panic), restoring root Cargo.toml
 
     if !status.success() {
         anyhow::bail!(CommandError::ProcessExit(status.code().unwrap_or(1)));

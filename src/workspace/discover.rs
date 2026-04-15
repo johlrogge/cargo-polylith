@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use cargo_toml::Manifest;
 
 use super::error::WorkspaceError;
-use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, RootDemotionPlan, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
+use super::model::{Brick, BrickKind, ExternalDepInfo, PolylithToml, Profile, Project, RootDemotionPlan, VersioningPolicy, WorkspaceMap, WorkspacePackageMeta, WorkspacePathDep};
 
 type Result<T> = std::result::Result<T, WorkspaceError>;
 
@@ -200,9 +200,16 @@ pub fn read_root_package_meta(root: &Path) -> Result<Option<WorkspacePackageMeta
     let content = fs::read_to_string(&toml_path).map_err(io_err(&toml_path))?;
     let doc: toml_edit::DocumentMut = content.parse().map_err(parse_err(&toml_path))?;
 
-    let pkg = match doc.get("package") {
-        Some(p) => p,
-        None => return Ok(None),
+    // Prefer [package] for backward compatibility with the legacy demotion model.
+    // Fall back to [workspace.package] for workspaces that have not been demoted
+    // (pre-migration root Cargo.toml) or for profile-generated root Cargo.toml files
+    // that use [workspace.package] to carry metadata.
+    let pkg = if let Some(p) = doc.get("package") {
+        p
+    } else if let Some(wp) = doc.get("workspace").and_then(|w| w.get("package")) {
+        wp
+    } else {
+        return Ok(None);
     };
 
     let version = pkg.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -272,7 +279,7 @@ pub fn collect_root_interface_deps(root: &Path) -> Result<std::collections::Hash
 ///
 /// Reads root `Cargo.toml` to extract `[workspace.package]` metadata and non-path
 /// `[workspace.dependencies]`, then scans `profiles/*.profile` for profile names.
-/// Returns a plan that `scaffold::execute_root_demotion` can consume.
+/// Returns a plan that `scaffold::write_polylith_toml` can consume.
 pub fn plan_root_demotion(root: &Path) -> Result<RootDemotionPlan> {
     use std::collections::HashMap;
 
@@ -413,10 +420,35 @@ fn parse_polylith_toml(root: &Path) -> Result<Option<PolylithToml>> {
         }
     }
 
+    // Parse [versioning] section — missing section means legacy workspace (both fields None).
+    let (versioning_policy, workspace_version, tag_prefix) = if let Some(ver) = doc.get("versioning").and_then(|t| t.as_table()) {
+        let policy = if let Some(policy_str) = ver.get("policy").and_then(|v| v.as_value()).and_then(|v| v.as_str()) {
+            let p = match policy_str {
+                "relaxed" => VersioningPolicy::Relaxed,
+                "strict" => VersioningPolicy::Strict,
+                other => return Err(WorkspaceError::Other(format!(
+                    "unknown versioning policy '{}' in Polylith.toml (expected 'relaxed' or 'strict')",
+                    other
+                ))),
+            };
+            Some(p)
+        } else {
+            None
+        };
+        let version = ver.get("version").and_then(|v| v.as_value()).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let tag_prefix = ver.get("tag_prefix").and_then(|v| v.as_value()).and_then(|v| v.as_str()).map(|s| s.to_string());
+        (policy, version, tag_prefix)
+    } else {
+        (None, None, None)
+    };
+
     Ok(Some(PolylithToml {
         schema_version,
         libraries,
         profiles,
+        versioning_policy,
+        workspace_version,
+        tag_prefix,
     }))
 }
 
@@ -764,9 +796,8 @@ pub fn resolve_profile_workspace(
     use super::model::ResolvedProfileWorkspace;
 
     // Helper: compute path relative to root, as a forward-slash string.
-    // With Option D profile workspaces, components/bases/projects are accessed via
-    // symlinks inside the profile dir, so member paths are just the root-relative path
-    // (e.g. "components/foo", "bases/bar") rather than "../../components/foo".
+    // Member paths are root-relative (e.g. "components/foo", "bases/bar") since the
+    // generated Cargo.toml lives at the workspace root.
     let rel_str = |abs: &Path| -> String {
         abs.strip_prefix(root)
             .unwrap_or(abs)
@@ -1225,5 +1256,85 @@ mod tests {
         assert_eq!(classify_dep("cli", &map), DepKind::Base("cli"));
         // unknown name
         assert_eq!(classify_dep("nonexistent_crate", &map), DepKind::External);
+    }
+
+    // --- Versioning section tests ---
+
+    /// Missing [versioning] section → both fields None (backward compatible).
+    #[test]
+    fn parse_polylith_toml_no_versioning_section() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path()).unwrap().unwrap();
+        assert!(result.versioning_policy.is_none());
+        assert!(result.workspace_version.is_none());
+    }
+
+    /// [versioning] with policy = "relaxed" parses correctly.
+    #[test]
+    fn parse_polylith_toml_relaxed_policy() {
+        use tempfile::TempDir;
+        use std::fs;
+        use super::super::model::VersioningPolicy;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"relaxed\"\nversion = \"1.0.0\"\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path()).unwrap().unwrap();
+        assert_eq!(result.versioning_policy, Some(VersioningPolicy::Relaxed));
+        assert_eq!(result.workspace_version.as_deref(), Some("1.0.0"));
+    }
+
+    /// [versioning] with policy = "strict" parses correctly.
+    #[test]
+    fn parse_polylith_toml_strict_policy() {
+        use tempfile::TempDir;
+        use std::fs;
+        use super::super::model::VersioningPolicy;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"strict\"\nversion = \"2.3.4\"\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path()).unwrap().unwrap();
+        assert_eq!(result.versioning_policy, Some(VersioningPolicy::Strict));
+        assert_eq!(result.workspace_version.as_deref(), Some("2.3.4"));
+    }
+
+    /// Unknown policy string returns an error.
+    #[test]
+    fn parse_polylith_toml_unknown_policy() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"experimental\"\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path());
+        assert!(result.is_err(), "expected error for unknown policy");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("experimental"), "error should mention the unknown value: {err_msg}");
+    }
+
+    /// [versioning] with version but no policy: version is Some, policy is None.
+    #[test]
+    fn parse_polylith_toml_version_without_policy() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nschema_version = 1\n\n[versioning]\nversion = \"0.5.0\"\n",
+        ).unwrap();
+        let result = parse_polylith_toml(dir.path()).unwrap().unwrap();
+        assert!(result.versioning_policy.is_none());
+        assert_eq!(result.workspace_version.as_deref(), Some("0.5.0"));
     }
 }

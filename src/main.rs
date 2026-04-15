@@ -45,6 +45,20 @@ fn main() {
                 ProjectAction::New { name } => commands::project::new(&name, workspace_root),
             }
         }
+        PolylithCommand::Bump { level, dry_run } => {
+            use commands::bump::BumpResult;
+            use output::table::{print_strict_bump_report};
+            commands::bump::run(level.as_deref(), workspace_root, dry_run).map(|result| {
+                match result {
+                    BumpResult::Relaxed { old, new } => {
+                        println!("bumped workspace version: {old} \u{2192} {new}");
+                    }
+                    BumpResult::Strict { recommendations, no_prior_tag: _ } => {
+                        print_strict_bump_report(&recommendations);
+                    }
+                }
+            })
+        }
         PolylithCommand::Deps { component, json } => {
             commands::deps::run(component.as_deref(), json, workspace_root)
         }
@@ -71,9 +85,6 @@ fn main() {
             match action {
                 ProfileAction::New { name } => commands::profile::new(&name, workspace_root),
                 ProfileAction::List { json } => commands::profile::list(json, workspace_root),
-                ProfileAction::Build { name, no_build } => {
-                    commands::profile::build(&name, no_build, workspace_root)
-                }
                 ProfileAction::Add { interface, r#impl, profile } => {
                     commands::profile::add(&interface, &r#impl, &profile, workspace_root)
                 }
@@ -83,6 +94,9 @@ fn main() {
         PolylithCommand::Cargo { profile, args: cargo_args } => {
             let profile_name = profile.as_deref().unwrap_or("dev");
             commands::profile::run_cargo(profile_name, &cargo_args, workspace_root)
+        }
+        PolylithCommand::ChangeProfile { name } => {
+            commands::profile::change_profile(&name, workspace_root)
         }
     };
 

@@ -95,15 +95,17 @@ Profile commands:
 ```bash
 cargo polylith profile new <name>                 # create a new empty profile
 cargo polylith profile list [--json]              # list defined profiles and their mappings
-cargo polylith profile build <name> [--no-build]  # activate a profile (patch Cargo.tomls); --no-build patches only
 cargo polylith profile add <interface> \
   --impl <path> --profile <name>                  # add or update one mapping in a profile
+cargo polylith profile migrate [--force]          # migrate root workspace to profile model
+cargo polylith change-profile <name>              # regenerate root Cargo.toml from a named profile
+cargo polylith cargo [--profile <name>] <cmd>     # run cargo command using a profile (default: dev)
 cargo polylith check --profile <name>             # validate the workspace as if profile <name> were active
 ```
 
-`profile build` resolves each mapping and rewrites the relevant `[dependencies]`
-entries in the development workspace and/or project `Cargo.toml` files. Use
-`--no-build` to stage the file changes without invoking `cargo build`.
+`change-profile` regenerates the root `Cargo.toml` from the named profile's `.profile` file.
+Use `cargo polylith cargo [--profile <name>] build` to build against a profile without
+permanently changing the root workspace.
 
 `check --profile <name>` validates profile-specific concerns — including
 `profile_impl_path_not_found` and `profile_impl_not_a_component` — in addition
