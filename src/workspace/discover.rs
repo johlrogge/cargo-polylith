@@ -200,9 +200,16 @@ pub fn read_root_package_meta(root: &Path) -> Result<Option<WorkspacePackageMeta
     let content = fs::read_to_string(&toml_path).map_err(io_err(&toml_path))?;
     let doc: toml_edit::DocumentMut = content.parse().map_err(parse_err(&toml_path))?;
 
-    let pkg = match doc.get("package") {
-        Some(p) => p,
-        None => return Ok(None),
+    // Prefer [package] for backward compatibility with the legacy demotion model.
+    // Fall back to [workspace.package] for workspaces that have not been demoted
+    // (pre-migration root Cargo.toml) or for profile-generated root Cargo.toml files
+    // that use [workspace.package] to carry metadata.
+    let pkg = if let Some(p) = doc.get("package") {
+        p
+    } else if let Some(wp) = doc.get("workspace").and_then(|w| w.get("package")) {
+        wp
+    } else {
+        return Ok(None);
     };
 
     let version = pkg.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -272,7 +279,7 @@ pub fn collect_root_interface_deps(root: &Path) -> Result<std::collections::Hash
 ///
 /// Reads root `Cargo.toml` to extract `[workspace.package]` metadata and non-path
 /// `[workspace.dependencies]`, then scans `profiles/*.profile` for profile names.
-/// Returns a plan that `scaffold::execute_root_demotion` can consume.
+/// Returns a plan that `scaffold::write_polylith_toml` can consume.
 pub fn plan_root_demotion(root: &Path) -> Result<RootDemotionPlan> {
     use std::collections::HashMap;
 
@@ -789,9 +796,8 @@ pub fn resolve_profile_workspace(
     use super::model::ResolvedProfileWorkspace;
 
     // Helper: compute path relative to root, as a forward-slash string.
-    // With Option D profile workspaces, components/bases/projects are accessed via
-    // symlinks inside the profile dir, so member paths are just the root-relative path
-    // (e.g. "components/foo", "bases/bar") rather than "../../components/foo".
+    // Member paths are root-relative (e.g. "components/foo", "bases/bar") since the
+    // generated Cargo.toml lives at the workspace root.
     let rel_str = |abs: &Path| -> String {
         abs.strip_prefix(root)
             .unwrap_or(abs)

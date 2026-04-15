@@ -108,6 +108,11 @@ pub enum PolylithCommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Generate root Cargo.toml from a named profile (replaces the current root workspace)
+    ChangeProfile {
+        /// Profile name (without .profile extension)
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -138,14 +143,6 @@ pub enum ProfileAction {
         /// Output as JSON
         #[arg(long)]
         json: bool,
-    },
-    /// Generate a profile workspace Cargo.toml and build it
-    Build {
-        /// Profile name (without .profile extension)
-        name: String,
-        /// Generate the workspace Cargo.toml but do not invoke cargo build
-        #[arg(long)]
-        no_build: bool,
     },
     /// Add or update an implementation selection in a profile
     Add {

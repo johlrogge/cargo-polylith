@@ -85,9 +85,6 @@ fn main() {
             match action {
                 ProfileAction::New { name } => commands::profile::new(&name, workspace_root),
                 ProfileAction::List { json } => commands::profile::list(json, workspace_root),
-                ProfileAction::Build { name, no_build } => {
-                    commands::profile::build(&name, no_build, workspace_root)
-                }
                 ProfileAction::Add { interface, r#impl, profile } => {
                     commands::profile::add(&interface, &r#impl, &profile, workspace_root)
                 }
@@ -97,6 +94,9 @@ fn main() {
         PolylithCommand::Cargo { profile, args: cargo_args } => {
             let profile_name = profile.as_deref().unwrap_or("dev");
             commands::profile::run_cargo(profile_name, &cargo_args, workspace_root)
+        }
+        PolylithCommand::ChangeProfile { name } => {
+            commands::profile::change_profile(&name, workspace_root)
         }
     };
 

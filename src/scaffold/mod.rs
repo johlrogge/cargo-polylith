@@ -232,47 +232,22 @@ pub fn create_project(root: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Write a profile workspace Cargo.toml from pre-resolved profile data.
+/// Write a root workspace Cargo.toml from pre-resolved profile data.
 ///
-/// Creates `profiles/<name>/Cargo.toml` at the workspace root, plus symlinks
-/// `profiles/<name>/components`, `profiles/<name>/bases`, and
-/// `profiles/<name>/projects` pointing to the real source directories at the
-/// workspace root (only when those directories exist).
+/// Writes to `<root>/Cargo.toml` directly — no profile subdirectory, no symlinks.
+/// The generated file includes the `GENERATED_HEADER`, the profile name as a source
+/// comment, `[workspace]` with members, `resolver = "2"`, and optionally
+/// `[workspace.package]` and `[workspace.dependencies]`.
+///
+/// Member paths are root-relative (e.g. `components/foo`) since the file lives at
+/// the workspace root — `resolve_profile_workspace` already produces this format.
 ///
 /// Returns the path to the generated file.
-pub fn write_profile_workspace(
+pub fn write_root_workspace_from_profile(
     root: &Path,
     resolved: &ResolvedProfileWorkspace,
 ) -> Result<std::path::PathBuf> {
-    let profile_dir = root.join("profiles").join(&resolved.profile_name);
-    fs::create_dir_all(&profile_dir).map_err(io_err(&profile_dir))?;
-
-    // Create symlinks for each top-level brick directory that exists at root.
-    // The symlink target is relative (../../<dir>) so it works regardless of
-    // where the workspace is checked out.
-    for dir_name in &["components", "bases", "projects"] {
-        let src = root.join(dir_name);
-        if src.exists() {
-            let link = profile_dir.join(dir_name);
-            if link.exists() || link.is_symlink() {
-                // Already present — skip (idempotent).
-            } else {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(
-                    format!("../../{dir_name}"),
-                    &link,
-                )
-                .map_err(io_err(&link))?;
-                #[cfg(not(unix))]
-                {
-                    let _ = link;
-                    eprintln!("warning: symlink creation is not supported on this platform — use WSL or Docker to run cargo-polylith on Windows");
-                }
-            }
-        }
-    }
-
-    let out_path = profile_dir.join("Cargo.toml");
+    let out_path = root.join("Cargo.toml");
 
     let member_lines = resolved
         .members
@@ -432,15 +407,12 @@ pub fn create_dev_profile_from_deps(root: &Path, impls: &[(String, String)]) -> 
 }
 
 
-/// Execute root workspace demotion using a pre-analysed `RootDemotionPlan` (write-only phase).
+/// Write `Polylith.toml` from a pre-analysed `RootDemotionPlan`.
 ///
-/// 1. Writes `Polylith.toml` from plan data
-/// 2. Strips `[workspace]` from root `Cargo.toml`
-/// 3. Adds a `[package]` placeholder and creates `src/lib.rs` if there was no `[package]`
-///
-/// The caller is responsible for checking whether `Polylith.toml` already exists before
-/// calling this function (and honouring the `--force` flag).
-pub fn execute_root_demotion(root: &Path, plan: &RootDemotionPlan) -> Result<()> {
+/// Writes only `Polylith.toml` — does NOT touch root `Cargo.toml`.
+/// The caller is responsible for checking whether `Polylith.toml` already exists
+/// before calling this function (and honouring the `--force` flag).
+pub fn write_polylith_toml(root: &Path, plan: &RootDemotionPlan) -> Result<()> {
     let polylith_toml_path = root.join("Polylith.toml");
 
     // Build Polylith.toml content from the plan
@@ -471,87 +443,6 @@ pub fn execute_root_demotion(root: &Path, plan: &RootDemotionPlan) -> Result<()>
 
     fs::write(&polylith_toml_path, &polylith_content).map_err(io_err(&polylith_toml_path))?;
 
-    // Remove [workspace] from root Cargo.toml entirely (read then write back)
-    let manifest_path = root.join("Cargo.toml");
-    let content = fs::read_to_string(&manifest_path).map_err(io_err(&manifest_path))?;
-    let mut doc: DocumentMut = content.parse().map_err(toml_err(&manifest_path))?;
-
-    doc.remove("workspace");
-
-    // Ensure the root Cargo.toml has a [package] section so Cargo can parse it.
-    // Without [package] or [workspace], Cargo errors when walking up from bricks.
-    // A dummy unpublished package is fine — Cargo walks past it (no [workspace])
-    // so profile workspaces can still claim the bricks as members.
-    if doc.get("package").is_none() {
-        let mut pkg = toml_edit::table();
-        pkg["name"] = toml_edit::value("workspace-root");
-        pkg["version"] = toml_edit::value(
-            plan.workspace_package.as_ref().and_then(|p| p.version.as_deref()).unwrap_or("0.0.0"),
-        );
-        pkg["edition"] = toml_edit::value(
-            plan.workspace_package.as_ref().and_then(|p| p.edition.as_deref()).unwrap_or("2021"),
-        );
-        pkg["publish"] = toml_edit::value(false);
-        if let Some(meta) = &plan.workspace_package {
-            if !meta.authors.is_empty() {
-                let mut arr = toml_edit::Array::new();
-                for author in &meta.authors {
-                    arr.push(author.as_str());
-                }
-                pkg["authors"] = toml_edit::value(arr);
-            }
-            if let Some(l) = &meta.license {
-                pkg["license"] = toml_edit::value(l.as_str());
-            }
-            if let Some(r) = &meta.repository {
-                pkg["repository"] = toml_edit::value(r.as_str());
-            }
-        }
-        doc.insert("package", pkg);
-        // Create an empty src/lib.rs so Cargo finds a valid target for this package.
-        let src_dir = root.join("src");
-        fs::create_dir_all(&src_dir).map_err(io_err(&src_dir))?;
-        let lib_rs = src_dir.join("lib.rs");
-        if !lib_rs.exists() {
-            fs::write(&lib_rs, "// Polylith workspace root placeholder — do not edit.\n")
-                .map_err(io_err(&lib_rs))?;
-        }
-    } else if let Some(meta) = &plan.workspace_package {
-        // [package] already exists — merge metadata fields (don't overwrite existing)
-        let pkg = doc["package"].as_table_mut().ok_or_else(|| ScaffoldError::Other("[package] is not a table".to_string()))?;
-        if pkg.get("version").is_none() {
-            if let Some(v) = &meta.version {
-                pkg["version"] = toml_edit::value(v.as_str());
-            }
-        }
-        if pkg.get("edition").is_none() {
-            if let Some(e) = &meta.edition {
-                pkg["edition"] = toml_edit::value(e.as_str());
-            }
-        }
-        if pkg.get("authors").is_none() && !meta.authors.is_empty() {
-            let mut arr = toml_edit::Array::new();
-            for author in &meta.authors {
-                arr.push(author.as_str());
-            }
-            pkg["authors"] = toml_edit::value(arr);
-        }
-        if pkg.get("license").is_none() {
-            if let Some(l) = &meta.license {
-                pkg["license"] = toml_edit::value(l.as_str());
-            }
-        }
-        if pkg.get("repository").is_none() {
-            if let Some(r) = &meta.repository {
-                pkg["repository"] = toml_edit::value(r.as_str());
-            }
-        }
-        // Always ensure publish = false
-        pkg["publish"] = toml_edit::value(false);
-    }
-
-    fs::write(&manifest_path, doc.to_string()).map_err(io_err(&manifest_path))?;
-
     Ok(())
 }
 
@@ -564,7 +455,6 @@ pub fn execute_root_demotion(root: &Path, plan: &RootDemotionPlan) -> Result<()>
 pub fn strip_workspace_inheritance(
     root: &Path,
     polylith_toml: &crate::workspace::PolylithToml,
-    _interface_impls: &[(String, String)],
     workspace_package: Option<&crate::workspace::WorkspacePackageMeta>,
 ) -> Result<usize> {
     let mut count = 0;
