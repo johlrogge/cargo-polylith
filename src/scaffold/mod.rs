@@ -600,7 +600,9 @@ fn strip_workspace_from_manifest(
 ///
 /// - Reads `Polylith.toml` looking for a `[workspace][package]` section.
 /// - If none exists, returns a "nothing to migrate" message.
-/// - Otherwise, merges fields into root `Cargo.toml` `[package]` (does not overwrite existing).
+/// - Otherwise, overwrites existing values for fields declared in `[workspace.package]`
+///   into root `Cargo.toml` `[package]`. Fields not declared in `[workspace.package]`
+///   are left untouched.
 /// - Removes `[workspace][package]` from `Polylith.toml`.
 /// - Writes both files back.
 /// - Returns a summary of migrated fields.
@@ -613,34 +615,33 @@ pub fn migrate_package_meta_to_cargo_toml(root: &Path) -> Result<String> {
     let poly_content = fs::read_to_string(&polylith_toml_path).map_err(io_err(&polylith_toml_path))?;
     let mut poly_doc: DocumentMut = poly_content.parse().map_err(toml_err(&polylith_toml_path))?;
 
-    // Check for [workspace.package]
-    let has_ws_pkg = poly_doc
+    // Check for [workspace.package] and bind once for all field reads
+    let ws_pkg = poly_doc
         .get("workspace")
-        .and_then(|w| w.get("package"))
-        .is_some();
+        .and_then(|w| w.get("package"));
 
-    if !has_ws_pkg {
+    if ws_pkg.is_none() {
         return Ok("nothing to migrate: no [workspace.package] in Polylith.toml".to_string());
     }
 
-    // Extract fields
-    let version = poly_doc
-        .get("workspace").and_then(|w| w.get("package"))
+    // Extract fields — all reads go through the bound `ws_pkg`
+    let version = ws_pkg
         .and_then(|p| p.get("version")).and_then(|v| v.as_str()).map(|s| s.to_string());
-    let edition = poly_doc
-        .get("workspace").and_then(|w| w.get("package"))
+    let edition = ws_pkg
         .and_then(|p| p.get("edition")).and_then(|v| v.as_str()).map(|s| s.to_string());
-    let authors: Vec<String> = poly_doc
-        .get("workspace").and_then(|w| w.get("package"))
+    // Track key *presence* separately so `authors = []` (explicit empty) is distinguished
+    // from the key being absent.  The other fields use `Option<String>` from `as_str`, which
+    // already cleanly distinguishes absent (None) from a string value, so only `authors`
+    // needs this treatment.
+    let authors_present = ws_pkg.and_then(|p| p.get("authors")).is_some();
+    let authors: Vec<String> = ws_pkg
         .and_then(|p| p.get("authors"))
         .and_then(|v| v.as_value()).and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
         .unwrap_or_default();
-    let license = poly_doc
-        .get("workspace").and_then(|w| w.get("package"))
+    let license = ws_pkg
         .and_then(|p| p.get("license")).and_then(|v| v.as_str()).map(|s| s.to_string());
-    let repository = poly_doc
-        .get("workspace").and_then(|w| w.get("package"))
+    let repository = ws_pkg
         .and_then(|p| p.get("repository")).and_then(|v| v.as_str()).map(|s| s.to_string());
 
     // Read root Cargo.toml
@@ -655,24 +656,20 @@ pub fn migrate_package_meta_to_cargo_toml(root: &Path) -> Result<String> {
         return Err(ScaffoldError::Other("root Cargo.toml has no [package] section".to_string()));
     }
 
-    // Merge fields (don't overwrite existing)
+    // Overwrite fields declared in [workspace.package]; untouched fields remain as-is
     let mut migrated = vec![];
     {
         let pkg = cargo_doc["package"].as_table_mut()
             .ok_or_else(|| ScaffoldError::Other("[package] is not a table".to_string()))?;
-        if pkg.get("version").is_none() {
-            if let Some(v) = &version {
-                pkg["version"] = toml_edit::value(v.as_str());
-                migrated.push(format!("version = \"{}\"", v));
-            }
+        if let Some(v) = &version {
+            pkg["version"] = toml_edit::value(v.as_str());
+            migrated.push(format!("version = \"{}\"", v));
         }
-        if pkg.get("edition").is_none() {
-            if let Some(e) = &edition {
-                pkg["edition"] = toml_edit::value(e.as_str());
-                migrated.push(format!("edition = \"{}\"", e));
-            }
+        if let Some(e) = &edition {
+            pkg["edition"] = toml_edit::value(e.as_str());
+            migrated.push(format!("edition = \"{}\"", e));
         }
-        if pkg.get("authors").is_none() && !authors.is_empty() {
+        if authors_present {
             let mut arr = toml_edit::Array::new();
             for author in &authors {
                 arr.push(author.as_str());
@@ -680,17 +677,13 @@ pub fn migrate_package_meta_to_cargo_toml(root: &Path) -> Result<String> {
             pkg["authors"] = toml_edit::value(arr);
             migrated.push(format!("authors = [{}]", authors.iter().map(|a| format!("\"{}\"", a)).collect::<Vec<_>>().join(", ")));
         }
-        if pkg.get("license").is_none() {
-            if let Some(l) = &license {
-                pkg["license"] = toml_edit::value(l.as_str());
-                migrated.push(format!("license = \"{}\"", l));
-            }
+        if let Some(l) = &license {
+            pkg["license"] = toml_edit::value(l.as_str());
+            migrated.push(format!("license = \"{}\"", l));
         }
-        if pkg.get("repository").is_none() {
-            if let Some(r) = &repository {
-                pkg["repository"] = toml_edit::value(r.as_str());
-                migrated.push(format!("repository = \"{}\"", r));
-            }
+        if let Some(r) = &repository {
+            pkg["repository"] = toml_edit::value(r.as_str());
+            migrated.push(format!("repository = \"{}\"", r));
         }
     }
 
@@ -704,7 +697,7 @@ pub fn migrate_package_meta_to_cargo_toml(root: &Path) -> Result<String> {
     fs::write(&polylith_toml_path, poly_doc.to_string()).map_err(io_err(&polylith_toml_path))?;
 
     if migrated.is_empty() {
-        Ok("Polylith.toml [workspace.package] removed; all fields already present in root Cargo.toml [package]".to_string())
+        Ok("Polylith.toml [workspace.package] removed; no recognized fields to migrate".to_string())
     } else {
         Ok(format!(
             "Migrated from Polylith.toml [workspace.package] to root Cargo.toml [package]: {}",
@@ -796,4 +789,227 @@ pub fn write_workspace_package_version(cargo_toml_path: &Path, new_version: &str
     doc["workspace"]["package"]["version"] = toml_edit::value(new_version);
     fs::write(cargo_toml_path, doc.to_string()).map_err(io_err(cargo_toml_path))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_file(dir: &TempDir, name: &str, content: &str) {
+        fs::write(dir.path().join(name), content).unwrap();
+    }
+
+    fn read_file(dir: &TempDir, name: &str) -> String {
+        fs::read_to_string(dir.path().join(name)).unwrap()
+    }
+
+    /// Bug fix: version in [workspace.package] overwrites placeholder in root [package]
+    #[test]
+    fn migrate_package_meta_overwrites_existing_version() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "Polylith.toml", r#"
+[workspace.package]
+version = "0.17.0"
+"#);
+        write_file(&dir, "Cargo.toml", r#"
+[package]
+name = "my-workspace"
+version = "0.0.0"
+"#);
+
+        let result = migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        assert!(result.contains("version"), "expected version in result: {result}");
+
+        let cargo = read_file(&dir, "Cargo.toml");
+        let doc: toml_edit::DocumentMut = cargo.parse().unwrap();
+        assert_eq!(
+            doc["package"]["version"].as_str(),
+            Some("0.17.0"),
+            "version should be overwritten with value from Polylith.toml"
+        );
+    }
+
+    /// Selective overwrite: only declared fields are changed; undeclared fields untouched
+    #[test]
+    fn migrate_package_meta_selective_overwrite() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "Polylith.toml", r#"
+[workspace.package]
+version = "1.2.3"
+edition = "2021"
+"#);
+        write_file(&dir, "Cargo.toml", r#"
+[package]
+name = "foo"
+version = "0.0.0"
+edition = "2018"
+description = "kept as-is"
+"#);
+
+        migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+
+        let cargo = read_file(&dir, "Cargo.toml");
+        let doc: toml_edit::DocumentMut = cargo.parse().unwrap();
+        assert_eq!(doc["package"]["version"].as_str(), Some("1.2.3"), "version should be overwritten");
+        assert_eq!(doc["package"]["edition"].as_str(), Some("2021"), "edition should be overwritten");
+        assert_eq!(doc["package"]["name"].as_str(), Some("foo"), "name should be untouched");
+        assert_eq!(doc["package"]["description"].as_str(), Some("kept as-is"), "description should be untouched");
+    }
+
+    /// [workspace.package] is removed from Polylith.toml after migration
+    #[test]
+    fn migrate_package_meta_removes_workspace_package_from_polylith_toml() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "Polylith.toml", r#"
+[workspace]
+name = "my-ws"
+
+[workspace.package]
+version = "1.0.0"
+"#);
+        write_file(&dir, "Cargo.toml", r#"
+[package]
+name = "my-ws"
+version = "0.0.0"
+"#);
+
+        migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+
+        let poly = read_file(&dir, "Polylith.toml");
+        let doc: toml_edit::DocumentMut = poly.parse().unwrap();
+        assert!(
+            doc.get("workspace").and_then(|w| w.get("package")).is_none(),
+            "Polylith.toml should no longer have [workspace.package]"
+        );
+    }
+
+    /// No [workspace.package] returns the "nothing to migrate" message without touching files
+    #[test]
+    fn migrate_package_meta_no_workspace_package_returns_nothing_to_migrate() {
+        let dir = TempDir::new().unwrap();
+        let polylith_content = "[workspace]\nname = \"my-ws\"\n";
+        let cargo_content = "[package]\nname = \"my-ws\"\nversion = \"1.0.0\"\n";
+        write_file(&dir, "Polylith.toml", polylith_content);
+        write_file(&dir, "Cargo.toml", cargo_content);
+
+        let result = migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        assert!(
+            result.contains("nothing to migrate"),
+            "expected 'nothing to migrate' message, got: {result}"
+        );
+
+        // Files should be unchanged
+        assert_eq!(read_file(&dir, "Polylith.toml"), polylith_content);
+        assert_eq!(read_file(&dir, "Cargo.toml"), cargo_content);
+    }
+
+    /// Missing root [package] section returns an error
+    #[test]
+    fn migrate_package_meta_missing_package_section_returns_error() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "Polylith.toml", r#"
+[workspace.package]
+version = "1.0.0"
+"#);
+        // Cargo.toml without a [package] section (workspace-only manifest)
+        write_file(&dir, "Cargo.toml", r#"
+[workspace]
+members = []
+"#);
+
+        let err = migrate_package_meta_to_cargo_toml(dir.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no [package] section"),
+            "expected 'no [package] section' error, got: {msg}"
+        );
+    }
+
+    /// authors array is overwritten when [workspace.package].authors is declared
+    #[test]
+    fn migrate_package_meta_overwrites_authors() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "Polylith.toml", r#"
+[workspace.package]
+authors = ["new1", "new2"]
+"#);
+        write_file(&dir, "Cargo.toml", r#"
+[package]
+name = "my-workspace"
+version = "0.0.0"
+authors = ["old"]
+"#);
+
+        let result = migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        assert!(result.contains("authors"), "expected authors in result: {result}");
+
+        let cargo = read_file(&dir, "Cargo.toml");
+        let doc: toml_edit::DocumentMut = cargo.parse().unwrap();
+        let authors: Vec<&str> = doc["package"]["authors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert_eq!(authors, vec!["new1", "new2"], "authors should be overwritten");
+    }
+
+    /// license and repository are overwritten when declared in [workspace.package]
+    #[test]
+    fn migrate_package_meta_overwrites_license_and_repository() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "Polylith.toml", r#"
+[workspace.package]
+license = "MIT"
+repository = "https://new.example/repo"
+"#);
+        write_file(&dir, "Cargo.toml", r#"
+[package]
+name = "my-workspace"
+version = "0.0.0"
+license = "Apache-2.0"
+repository = "https://old.example/repo"
+"#);
+
+        migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+
+        let cargo = read_file(&dir, "Cargo.toml");
+        let doc: toml_edit::DocumentMut = cargo.parse().unwrap();
+        assert_eq!(doc["package"]["license"].as_str(), Some("MIT"), "license should be overwritten");
+        assert_eq!(
+            doc["package"]["repository"].as_str(),
+            Some("https://new.example/repo"),
+            "repository should be overwritten"
+        );
+    }
+
+    /// Explicit `authors = []` in [workspace.package] clears root authors (presence is source of truth)
+    #[test]
+    fn migrate_package_meta_explicit_empty_authors_clears_root() {
+        let dir = TempDir::new().unwrap();
+        write_file(&dir, "Polylith.toml", r#"
+[workspace.package]
+authors = []
+"#);
+        write_file(&dir, "Cargo.toml", r#"
+[package]
+name = "my-workspace"
+version = "0.0.0"
+authors = ["someone"]
+"#);
+
+        let result = migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        assert!(result.contains("authors"), "expected authors in result: {result}");
+
+        let cargo = read_file(&dir, "Cargo.toml");
+        let doc: toml_edit::DocumentMut = cargo.parse().unwrap();
+        let authors: Vec<&str> = doc["package"]["authors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(authors.is_empty(), "root authors should be cleared to empty array, got: {authors:?}");
+    }
 }
