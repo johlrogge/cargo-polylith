@@ -14,11 +14,15 @@ pub enum VersioningPolicy {
 }
 
 /// Shared package metadata from root `Cargo.toml` `[package]`.
+///
+/// `authors` is `None` when the `authors` key was absent in the source, and `Some(vec)`
+/// (possibly empty) when the key was explicitly present. This distinction allows
+/// consumers to faithfully mirror `authors = []` (explicit empty) vs a missing key.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkspacePackageMeta {
     pub version: Option<String>,
     pub edition: Option<String>,
-    pub authors: Vec<String>,
+    pub authors: Option<Vec<String>>,
     pub license: Option<String>,
     pub repository: Option<String>,
 }

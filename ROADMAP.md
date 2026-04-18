@@ -2,6 +2,14 @@
 
 ## Shipped
 
+### 0.12.0 — MCP `polylith_change_profile` write tool ✅
+
+- `polylith_change_profile` added to the MCP write tool set (enabled with `--write`).
+  Regenerates the root `Cargo.toml` from a named profile; `name` is a required argument.
+  AI assistants can now switch profiles without leaving the MCP session.
+- Internal: `[workspace.package]` reading moved from `scaffold/` into `workspace/`,
+  enforcing the read-only / write-only module boundary.
+
 ### 0.9.0 — Profile workspaces generate root Cargo.toml ✅
 
 Supersedes the symlink model (0.8.3). The root `Cargo.toml` IS the workspace; profiles

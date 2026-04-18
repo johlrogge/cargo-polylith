@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::commands::validate::validate_brick_name;
 use crate::scaffold;
-use crate::workspace::{build_workspace_map, classify_dep, discover_profiles, resolve_root, run_checks, run_status, DepKind};
+use crate::workspace::{build_workspace_map, classify_dep, discover_profiles, read_polylith_workspace_package, resolve_profile_workspace, resolve_root, run_checks, run_status, DepKind};
 use crate::commands::bump as bump_cmd;
 
 /// Process a single JSON-RPC line and return the response value, or `None` if
@@ -178,6 +178,17 @@ fn tools_list(id: Value, write: bool) -> Value {
                         "profile": { "type": "string", "description": "Profile name (without .profile extension)" },
                         "interface": { "type": "string", "description": "Interface dep key" },
                         "implementation": { "type": "string", "description": "Path to the implementation component (relative to workspace root)" }
+                    }
+                }
+            }),
+            json!({
+                "name": "polylith_change_profile",
+                "description": "Regenerate root Cargo.toml from a named profile (overwrites the current root workspace)",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {
+                        "name": { "type": "string", "description": "Profile name (without .profile extension)" }
                     }
                 }
             }),
@@ -370,7 +381,7 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
         // ── write tools ─────────────────────────────────────────────────────
         "polylith_component_new" | "polylith_base_new" | "polylith_project_new"
         | "polylith_component_update"
-        | "polylith_profile_new" | "polylith_profile_add" | "polylith_base_update"
+        | "polylith_profile_new" | "polylith_profile_add" | "polylith_change_profile" | "polylith_base_update"
         | "polylith_migrate_package_meta" | "polylith_bump"
             if !write =>
         {
@@ -493,6 +504,34 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
             }
         }
 
+        // Inlined (not commands::profile::change_profile) — that path uses println! which would corrupt JSON-RPC stdout framing.
+        "polylith_change_profile" => {
+            let profile_name = match params["arguments"]["name"].as_str() {
+                Some(s) if !s.is_empty() => s,
+                _ => return jsonrpc_error(id, -32602, "missing required parameter: name".to_string()),
+            };
+            match build_workspace_map(root) {
+                Ok(map) => {
+                    match discover_profiles(root) {
+                        Ok(profiles) => {
+                            match profiles.into_iter().find(|p| p.name == profile_name) {
+                                Some(profile) => {
+                                    let resolved = resolve_profile_workspace(root, &profile, &map);
+                                    match scaffold::write_root_workspace_from_profile(root, &resolved) {
+                                        Ok(_) => Ok(format!("regenerated root Cargo.toml from profile '{profile_name}'")),
+                                        Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
+                                    }
+                                }
+                                None => Err(jsonrpc_error(id.clone(), -32000, format!("profile '{profile_name}' not found"))),
+                            }
+                        }
+                        Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
+                    }
+                }
+                Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
+            }
+        }
+
         "polylith_base_update" => {
             let base_name = match params["arguments"]["name"].as_str() {
                 Some(s) if !s.is_empty() => s,
@@ -516,8 +555,12 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
         }
 
         "polylith_migrate_package_meta" => {
-            match scaffold::migrate_package_meta_to_cargo_toml(root) {
-                Ok(msg) => Ok(msg),
+            match read_polylith_workspace_package(root) {
+                Ok(None) => Ok("nothing to migrate: no [workspace.package] in Polylith.toml".to_string()),
+                Ok(Some(ws_pkg)) => match scaffold::migrate_package_meta_to_cargo_toml(root, ws_pkg) {
+                    Ok(msg) => Ok(msg),
+                    Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
+                },
                 Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }
@@ -721,5 +764,62 @@ mod tests {
         assert!(result.is_some(), "unknown request (with id) must produce a response");
         let resp = result.unwrap();
         assert_eq!(resp["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn tools_call_change_profile_without_write_flag_returns_error() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "polylith_change_profile",
+                "arguments": { "name": "dev" }
+            }
+        });
+        let root = std::path::Path::new("/tmp");
+        let resp = tools_call(json!(10), &req, root, false);
+        assert!(resp.get("error").is_some(), "write-disabled tool must return JSON-RPC error");
+        assert!(resp.get("result").is_none(), "write-disabled tool must not return success result");
+        assert_eq!(resp["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn tools_call_change_profile_missing_name_returns_invalid_params() {
+        let req = json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "polylith_change_profile",
+                "arguments": {}
+            }
+        });
+        let root = std::path::Path::new("/tmp");
+        let resp = tools_call(json!(11), &req, root, true);
+        assert!(resp.get("error").is_some(), "missing name must return JSON-RPC error");
+        assert!(resp.get("result").is_none(), "missing name must not return success result");
+        assert_eq!(resp["error"]["code"], -32602);
+        assert!(
+            resp["error"]["message"].as_str().unwrap_or("").contains("name"),
+            "error message must mention 'name'"
+        );
+    }
+
+    #[test]
+    fn tools_list_advertises_change_profile_only_with_write() {
+        let resp_write = tools_list(json!(1), true);
+        let tools_write = resp_write["result"]["tools"].as_array().expect("tools must be an array");
+        assert!(
+            tools_write.iter().any(|t| t["name"] == "polylith_change_profile"),
+            "polylith_change_profile must appear in tools list when write=true"
+        );
+
+        let resp_no_write = tools_list(json!(1), false);
+        let tools_no_write = resp_no_write["result"]["tools"].as_array().expect("tools must be an array");
+        assert!(
+            !tools_no_write.iter().any(|t| t["name"] == "polylith_change_profile"),
+            "polylith_change_profile must NOT appear in tools list when write=false"
+        );
     }
 }

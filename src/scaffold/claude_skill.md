@@ -126,6 +126,7 @@ the user before creating or modifying workspace structure.
 | `polylith_profile_list` | List defined profiles and their interface-to-implementation mappings | — |
 | `polylith_profile_new` | Create a new empty profile | `name` |
 | `polylith_profile_add` | Add or update one mapping in a profile | `profile`, `interface`, `implementation` |
+| `polylith_change_profile` | Regenerate root Cargo.toml from a named profile (overwrites the current root workspace) | `name` |
 
 If MCP write tools are unavailable (server started without `--write`, or MCP not active),
 fall back to the CLI equivalents:

@@ -1,0 +1,26 @@
+allowUnfree: true
+
+inputs:
+  nixpkgs:
+    url: github:cachix/devenv-nixpkgs/rolling
+  rust-overlay:
+    url: github:oxalica/rust-overlay
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  claude-code-nix:
+    url: github:sadjow/claude-code-nix
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  ctx:
+    url: gitlab:johlrogge.rs/ctx
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  metadev:
+    url: github:johlrogge/metadev
+    flake: false
+
+imports:
+  - metadev

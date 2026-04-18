@@ -268,14 +268,18 @@ pub fn write_root_workspace_from_profile(
         if let Some(e) = &pkg.edition {
             lines.push(format!("edition = \"{}\"", e));
         }
-        if !pkg.authors.is_empty() {
-            let authors_list = pkg
-                .authors
-                .iter()
-                .map(|a| format!("\"{}\"", a))
-                .collect::<Vec<_>>()
-                .join(", ");
-            lines.push(format!("authors = [{}]", authors_list));
+        if let Some(authors) = &pkg.authors {
+            // Note: profile generation suppresses authors = [] (less noise in generated output).
+            // Contrast with migrate, which preserves explicit empty arrays for mirror-fidelity
+            // from the source. This asymmetry is intentional — do not "fix" it to be symmetric.
+            if !authors.is_empty() {
+                let authors_list = authors
+                    .iter()
+                    .map(|a| format!("\"{}\"", a))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                lines.push(format!("authors = [{}]", authors_list));
+            }
         }
         if let Some(l) = &pkg.license {
             lines.push(format!("license = \"{}\"", l));
@@ -520,9 +524,9 @@ fn strip_workspace_from_manifest(
     // Handle authors separately (it's an array)
     if is_workspace_true_item(doc.get("package").and_then(|p| p.get("authors"))) {
         if let Some(meta) = pkg_meta {
-            if !meta.authors.is_empty() {
+            if let Some(authors) = &meta.authors {
                 let mut arr = toml_edit::Array::new();
-                for author in &meta.authors {
+                for author in authors {
                     arr.push(author.as_str());
                 }
                 doc["package"]["authors"] = toml_edit::value(arr);
@@ -598,15 +602,16 @@ fn strip_workspace_from_manifest(
 
 /// Migrate `[workspace.package]` metadata from `Polylith.toml` to root `Cargo.toml` `[package]`.
 ///
-/// - Reads `Polylith.toml` looking for a `[workspace][package]` section.
-/// - If none exists, returns a "nothing to migrate" message.
-/// - Otherwise, overwrites existing values for fields declared in `[workspace.package]`
-///   into root `Cargo.toml` `[package]`. Fields not declared in `[workspace.package]`
-///   are left untouched.
+/// The caller is responsible for reading `[workspace.package]` via
+/// `workspace::read_polylith_workspace_package` and passing the result here.
+/// Passing a `WorkspacePackageMeta` signals that there is something to migrate.
+///
+/// - Overwrites existing values for fields declared in `ws_pkg` into root `Cargo.toml`
+///   `[package]`. Fields not present in `ws_pkg` are left untouched.
 /// - Removes `[workspace][package]` from `Polylith.toml`.
 /// - Writes both files back.
 /// - Returns a summary of migrated fields.
-pub fn migrate_package_meta_to_cargo_toml(root: &Path) -> Result<String> {
+pub fn migrate_package_meta_to_cargo_toml(root: &Path, ws_pkg: crate::workspace::WorkspacePackageMeta) -> Result<String> {
     let polylith_toml_path = root.join("Polylith.toml");
     if !polylith_toml_path.exists() {
         return Err(ScaffoldError::Other("Polylith.toml not found".to_string()));
@@ -614,35 +619,6 @@ pub fn migrate_package_meta_to_cargo_toml(root: &Path) -> Result<String> {
 
     let poly_content = fs::read_to_string(&polylith_toml_path).map_err(io_err(&polylith_toml_path))?;
     let mut poly_doc: DocumentMut = poly_content.parse().map_err(toml_err(&polylith_toml_path))?;
-
-    // Check for [workspace.package] and bind once for all field reads
-    let ws_pkg = poly_doc
-        .get("workspace")
-        .and_then(|w| w.get("package"));
-
-    if ws_pkg.is_none() {
-        return Ok("nothing to migrate: no [workspace.package] in Polylith.toml".to_string());
-    }
-
-    // Extract fields — all reads go through the bound `ws_pkg`
-    let version = ws_pkg
-        .and_then(|p| p.get("version")).and_then(|v| v.as_str()).map(|s| s.to_string());
-    let edition = ws_pkg
-        .and_then(|p| p.get("edition")).and_then(|v| v.as_str()).map(|s| s.to_string());
-    // Track key *presence* separately so `authors = []` (explicit empty) is distinguished
-    // from the key being absent.  The other fields use `Option<String>` from `as_str`, which
-    // already cleanly distinguishes absent (None) from a string value, so only `authors`
-    // needs this treatment.
-    let authors_present = ws_pkg.and_then(|p| p.get("authors")).is_some();
-    let authors: Vec<String> = ws_pkg
-        .and_then(|p| p.get("authors"))
-        .and_then(|v| v.as_value()).and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-    let license = ws_pkg
-        .and_then(|p| p.get("license")).and_then(|v| v.as_str()).map(|s| s.to_string());
-    let repository = ws_pkg
-        .and_then(|p| p.get("repository")).and_then(|v| v.as_str()).map(|s| s.to_string());
 
     // Read root Cargo.toml
     let cargo_toml_path = root.join("Cargo.toml");
@@ -661,27 +637,29 @@ pub fn migrate_package_meta_to_cargo_toml(root: &Path) -> Result<String> {
     {
         let pkg = cargo_doc["package"].as_table_mut()
             .ok_or_else(|| ScaffoldError::Other("[package] is not a table".to_string()))?;
-        if let Some(v) = &version {
+        if let Some(v) = &ws_pkg.version {
             pkg["version"] = toml_edit::value(v.as_str());
             migrated.push(format!("version = \"{}\"", v));
         }
-        if let Some(e) = &edition {
+        if let Some(e) = &ws_pkg.edition {
             pkg["edition"] = toml_edit::value(e.as_str());
             migrated.push(format!("edition = \"{}\"", e));
         }
-        if authors_present {
+        // `authors` is `Some` when the key was explicitly present in the source — even if empty.
+        // This lets `authors = []` (explicit clear) pass through correctly.
+        if let Some(authors) = &ws_pkg.authors {
             let mut arr = toml_edit::Array::new();
-            for author in &authors {
+            for author in authors {
                 arr.push(author.as_str());
             }
             pkg["authors"] = toml_edit::value(arr);
             migrated.push(format!("authors = [{}]", authors.iter().map(|a| format!("\"{}\"", a)).collect::<Vec<_>>().join(", ")));
         }
-        if let Some(l) = &license {
+        if let Some(l) = &ws_pkg.license {
             pkg["license"] = toml_edit::value(l.as_str());
             migrated.push(format!("license = \"{}\"", l));
         }
-        if let Some(r) = &repository {
+        if let Some(r) = &ws_pkg.repository {
             pkg["repository"] = toml_edit::value(r.as_str());
             migrated.push(format!("repository = \"{}\"", r));
         }
@@ -804,6 +782,12 @@ mod tests {
         fs::read_to_string(dir.path().join(name)).unwrap()
     }
 
+    fn read_ws_pkg(dir: &TempDir) -> crate::workspace::WorkspacePackageMeta {
+        crate::workspace::read_polylith_workspace_package(dir.path())
+            .expect("read_polylith_workspace_package failed")
+            .expect("expected Some(WorkspacePackageMeta), got None")
+    }
+
     /// Bug fix: version in [workspace.package] overwrites placeholder in root [package]
     #[test]
     fn migrate_package_meta_overwrites_existing_version() {
@@ -818,7 +802,8 @@ name = "my-workspace"
 version = "0.0.0"
 "#);
 
-        let result = migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        let ws_pkg = read_ws_pkg(&dir);
+        let result = migrate_package_meta_to_cargo_toml(dir.path(), ws_pkg).unwrap();
         assert!(result.contains("version"), "expected version in result: {result}");
 
         let cargo = read_file(&dir, "Cargo.toml");
@@ -847,7 +832,8 @@ edition = "2018"
 description = "kept as-is"
 "#);
 
-        migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        let ws_pkg = read_ws_pkg(&dir);
+        migrate_package_meta_to_cargo_toml(dir.path(), ws_pkg).unwrap();
 
         let cargo = read_file(&dir, "Cargo.toml");
         let doc: toml_edit::DocumentMut = cargo.parse().unwrap();
@@ -874,7 +860,8 @@ name = "my-ws"
 version = "0.0.0"
 "#);
 
-        migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        let ws_pkg = read_ws_pkg(&dir);
+        migrate_package_meta_to_cargo_toml(dir.path(), ws_pkg).unwrap();
 
         let poly = read_file(&dir, "Polylith.toml");
         let doc: toml_edit::DocumentMut = poly.parse().unwrap();
@@ -884,19 +871,23 @@ version = "0.0.0"
         );
     }
 
-    /// No [workspace.package] returns the "nothing to migrate" message without touching files
+    /// No [workspace.package] means the reader returns Ok(None) — nothing to migrate
+    ///
+    /// This test now lives here as a reader-level test; the migrate function itself
+    /// no longer handles the absent-section case (the caller is responsible).
     #[test]
-    fn migrate_package_meta_no_workspace_package_returns_nothing_to_migrate() {
+    fn read_polylith_workspace_package_returns_none_when_section_absent() {
         let dir = TempDir::new().unwrap();
         let polylith_content = "[workspace]\nname = \"my-ws\"\n";
         let cargo_content = "[package]\nname = \"my-ws\"\nversion = \"1.0.0\"\n";
         write_file(&dir, "Polylith.toml", polylith_content);
         write_file(&dir, "Cargo.toml", cargo_content);
 
-        let result = migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        let result = crate::workspace::read_polylith_workspace_package(dir.path())
+            .expect("expected Ok, got Err");
         assert!(
-            result.contains("nothing to migrate"),
-            "expected 'nothing to migrate' message, got: {result}"
+            result.is_none(),
+            "expected None when [workspace.package] is absent, got: {result:?}"
         );
 
         // Files should be unchanged
@@ -918,7 +909,8 @@ version = "1.0.0"
 members = []
 "#);
 
-        let err = migrate_package_meta_to_cargo_toml(dir.path()).unwrap_err();
+        let ws_pkg = read_ws_pkg(&dir);
+        let err = migrate_package_meta_to_cargo_toml(dir.path(), ws_pkg).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("no [package] section"),
@@ -941,7 +933,8 @@ version = "0.0.0"
 authors = ["old"]
 "#);
 
-        let result = migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        let ws_pkg = read_ws_pkg(&dir);
+        let result = migrate_package_meta_to_cargo_toml(dir.path(), ws_pkg).unwrap();
         assert!(result.contains("authors"), "expected authors in result: {result}");
 
         let cargo = read_file(&dir, "Cargo.toml");
@@ -972,7 +965,8 @@ license = "Apache-2.0"
 repository = "https://old.example/repo"
 "#);
 
-        migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        let ws_pkg = read_ws_pkg(&dir);
+        migrate_package_meta_to_cargo_toml(dir.path(), ws_pkg).unwrap();
 
         let cargo = read_file(&dir, "Cargo.toml");
         let doc: toml_edit::DocumentMut = cargo.parse().unwrap();
@@ -985,6 +979,9 @@ repository = "https://old.example/repo"
     }
 
     /// Explicit `authors = []` in [workspace.package] clears root authors (presence is source of truth)
+    ///
+    /// With `authors: Option<Vec<String>>`, `Some(vec![])` means "key was present but empty" —
+    /// the type system now carries the distinction that previously required a local `authors_present: bool`.
     #[test]
     fn migrate_package_meta_explicit_empty_authors_clears_root() {
         let dir = TempDir::new().unwrap();
@@ -999,7 +996,11 @@ version = "0.0.0"
 authors = ["someone"]
 "#);
 
-        let result = migrate_package_meta_to_cargo_toml(dir.path()).unwrap();
+        let ws_pkg = read_ws_pkg(&dir);
+        // Confirm the type system captures the presence of an empty array
+        assert_eq!(ws_pkg.authors, Some(vec![]), "authors should be Some(empty), not None");
+
+        let result = migrate_package_meta_to_cargo_toml(dir.path(), ws_pkg).unwrap();
         assert!(result.contains("authors"), "expected authors in result: {result}");
 
         let cargo = read_file(&dir, "Cargo.toml");
