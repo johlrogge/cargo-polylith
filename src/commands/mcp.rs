@@ -10,6 +10,27 @@ use crate::scaffold;
 use crate::workspace::{build_workspace_map, classify_dep, discover_profiles, resolve_root, run_checks, run_status, DepKind};
 use crate::commands::bump as bump_cmd;
 
+/// Process a single JSON-RPC line and return the response value, or `None` if
+/// the line is a notification (no `id` field) that must not be replied to.
+fn handle_line(line: &str, root: &Path, write: bool) -> Option<Value> {
+    let req = serde_json::from_str::<Value>(line).ok()?;
+
+    let is_notification = req.get("id").is_none();
+    let id = req.get("id").cloned().unwrap_or(Value::Null);
+    let method = req["method"].as_str().unwrap_or("");
+
+    let response = match method {
+        "initialize" => initialize(id),
+        "notifications/initialized" | "initialized" => return None,
+        "tools/list" => tools_list(id, write),
+        "tools/call" => tools_call(id, &req, root, write),
+        _ if is_notification => return None,
+        _ => method_not_found(id, method),
+    };
+
+    Some(response)
+}
+
 pub fn serve(workspace_root: Option<&Path>, write: bool) -> Result<()> {
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
@@ -23,19 +44,9 @@ pub fn serve(workspace_root: Option<&Path>, write: bool) -> Result<()> {
         if line.trim().is_empty() {
             continue;
         }
-        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+
+        let Some(response) = handle_line(&line, &root, write) else {
             continue;
-        };
-
-        let id = req.get("id").cloned().unwrap_or(Value::Null);
-        let method = req["method"].as_str().unwrap_or("");
-
-        let response = match method {
-            "initialize" => initialize(id),
-            "initialized" => continue,
-            "tools/list" => tools_list(id, write),
-            "tools/call" => tools_call(id, &req, &root, write),
-            _ => method_not_found(id, method),
         };
 
         writeln!(out, "{}", serde_json::to_string(&response)?)?;
@@ -657,5 +668,58 @@ mod tests {
         let resp = tools_call(json!(2), &req, root, false);
         assert!(resp.get("error").is_some(), "write-disabled tool must return JSON-RPC error");
         assert!(resp.get("result").is_none(), "write-disabled tool must not return success result");
+    }
+
+    // ── handle_line: notification handling ───────────────────────────────────
+
+    #[test]
+    fn handle_line_notifications_initialized_produces_no_response() {
+        // MCP clients send "notifications/initialized" without an id field.
+        let line = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        let root = std::path::Path::new("/tmp");
+        let result = handle_line(line, root, false);
+        assert!(result.is_none(), "notifications/initialized must produce no response");
+    }
+
+    #[test]
+    fn handle_line_bare_initialized_produces_no_response() {
+        // Keep backward-compat: bare "initialized" (no id) must also be silent.
+        let line = r#"{"jsonrpc":"2.0","method":"initialized"}"#;
+        let root = std::path::Path::new("/tmp");
+        let result = handle_line(line, root, false);
+        assert!(result.is_none(), "bare initialized must produce no response");
+    }
+
+    #[test]
+    fn handle_line_unknown_notification_produces_no_response() {
+        // Any message without an id is a notification and must be silently ignored.
+        let line = r#"{"jsonrpc":"2.0","method":"some/unknown"}"#;
+        let root = std::path::Path::new("/tmp");
+        let result = handle_line(line, root, false);
+        assert!(result.is_none(), "unknown notification (no id) must produce no response");
+    }
+
+    #[test]
+    fn handle_line_request_after_notification_still_gets_response() {
+        // A tools/list request (with id) must still get a response even if a
+        // notification was received earlier in the session.
+        let line = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let root = std::path::Path::new("/tmp");
+        let result = handle_line(line, root, false);
+        assert!(result.is_some(), "tools/list request must produce a response");
+        let resp = result.unwrap();
+        assert!(resp.get("result").is_some(), "tools/list must return a result");
+        assert!(resp.get("error").is_none());
+    }
+
+    #[test]
+    fn handle_line_unknown_method_with_id_returns_method_not_found() {
+        // Unknown method WITH an id is a request, so we must reply with an error.
+        let line = r#"{"jsonrpc":"2.0","id":5,"method":"unknown/method"}"#;
+        let root = std::path::Path::new("/tmp");
+        let result = handle_line(line, root, false);
+        assert!(result.is_some(), "unknown request (with id) must produce a response");
+        let resp = result.unwrap();
+        assert_eq!(resp["error"]["code"], -32601);
     }
 }
