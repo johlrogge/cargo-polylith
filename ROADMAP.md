@@ -2,6 +2,18 @@
 
 ## Shipped
 
+### 0.14.0 — `.profile` files carry `[profile.*]` settings ✅
+
+- `.profile` files now accept `[profile.release]`, `[profile.dev]`, `[profile.bench]`,
+  and any `[profile.*]` sections alongside `[implementations]`. These pass through
+  verbatim into the generated root `Cargo.toml` on `cargo polylith change-profile`,
+  so profile-specific build settings (`strip`, `lto`, `opt-level`, nested package
+  overrides) survive profile switches.
+- `change-profile` and `migrate` warn on stderr when the current root `Cargo.toml`
+  contains `[profile.*]` sections not declared in any `.profile`, so users upgrading
+  from pre-0.14 workspaces can migrate those settings before the next regeneration
+  overwrites them.
+
 ### 0.13.0 — `polylith_status` old-model profile hint ✅
 
 - `polylith_status` now detects pre-0.11 profile directories (`profiles/<name>/Cargo.toml`)

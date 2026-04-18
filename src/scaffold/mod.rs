@@ -298,6 +298,12 @@ pub fn write_root_workspace_from_profile(
         format!("\n[workspace.dependencies]\n{}\n", dep_lines.join("\n"))
     };
 
+    let profiles_section = if resolved.cargo_profile_sections.is_empty() {
+        String::new()
+    } else {
+        format!("\n{}", resolved.cargo_profile_sections.join("\n"))
+    };
+
     let content = format!(
         "{header}\
          # Source: profiles/{name}.profile\n\
@@ -307,12 +313,13 @@ pub fn write_root_workspace_from_profile(
          {members}\n\
          ]\n\
          resolver = \"2\"\n\
-         {pkg}{deps}",
+         {pkg}{deps}{profiles}",
         header = GENERATED_HEADER,
         name = resolved.profile_name,
         members = member_lines,
         pkg = pkg_section,
         deps = deps_section,
+        profiles = profiles_section,
     );
 
     fs::write(&out_path, &content).map_err(io_err(&out_path))?;
