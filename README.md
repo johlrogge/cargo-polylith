@@ -595,6 +595,7 @@ Communicates over stdin/stdout using the standard MCP JSON-RPC transport.
 | `polylith_deps` | Dependency graph, optionally filtered by brick name |
 | `polylith_check` | Violations and warnings |
 | `polylith_status` | Structural health summary |
+| `polylith_profile_list` | List all profiles and their implementation selections |
 
 **Write tools (enabled with `--write`):**
 
@@ -605,11 +606,10 @@ Communicates over stdin/stdout using the standard MCP JSON-RPC transport.
 | `polylith_base_update` | Toggle a base between standard and test-base |
 | `polylith_project_new` | Create a new project workspace |
 | `polylith_component_update` | Update a component's interface annotation |
-| `polylith_set_implementation` | Select a component implementation for a project |
 | `polylith_profile_new` | Create a new empty profile file |
-| `polylith_profile_list` | List all profiles and their implementation selections |
 | `polylith_profile_add` | Add or update an implementation selection in a profile |
 | `polylith_bump` | Bump the workspace version in `Polylith.toml`; `level` (`major`, `minor`, `patch`) required in relaxed mode, auto-detected in strict mode; accepts `dry_run: true` |
+| `polylith_migrate_package_meta` | Overwrite root `Cargo.toml [package]` fields with values from `Polylith.toml [workspace.package]`, then remove `[workspace.package]` from `Polylith.toml`. Fields present in `Polylith.toml` overwrite existing values in `Cargo.toml`; fields absent from `Polylith.toml` are left untouched. |
 
 To wire up an AI assistant (e.g. Claude Code), add to `.mcp.json` at the workspace root:
 
@@ -736,3 +736,9 @@ my-mono/
 | `src/scaffold/` | Write-only: create directories and render file templates |
 | `src/commands/` | Thin dispatch: parse CLI args → call workspace or scaffold → call output |
 | `src/output/` | All terminal rendering and JSON serialisation |
+
+---
+
+## Releasing
+
+See [RELEASING.md](RELEASING.md) for the full release checklist (git-flow branch model, pre-release steps, versioning rules).
