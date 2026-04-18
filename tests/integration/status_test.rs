@@ -108,6 +108,68 @@ fn status_wildcard_reexport_is_divergence() {
     assert!(text.contains("wildcard") || text.contains("Divergence"), "{text}");
 }
 
+// ── old-model profile directory suggestion ────────────────────────────────────
+
+#[test]
+fn status_old_model_profile_dir_is_suggestion() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+    let dev_dir = tmp.path().join("profiles/dev");
+    fs::create_dir_all(&dev_dir).unwrap();
+    fs::write(
+        dev_dir.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+
+    cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("profiles/dev"))
+        .stdout(predicate::str::contains("change-profile dev"));
+}
+
+#[test]
+fn status_old_model_json_suggestion() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+    let dev_dir = tmp.path().join("profiles/dev");
+    fs::create_dir_all(&dev_dir).unwrap();
+    fs::write(
+        dev_dir.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+
+    let out = cargo_polylith()
+        .args(["polylith", "--workspace-root", tmp.path().to_str().unwrap(), "status", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let text = std::str::from_utf8(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(text).expect("not valid JSON");
+    let suggestions = parsed["suggestions"].as_array().expect("suggestions must be array");
+    assert!(
+        suggestions.iter().any(|s| {
+            let s = s.as_str().unwrap_or("");
+            s.contains("profiles/dev") && s.contains("change-profile dev")
+        }),
+        "expected old-model hint in suggestions JSON, got: {suggestions:?}"
+    );
+}
+
 // ── --json output has required keys ───────────────────────────────────────────
 
 #[test]
