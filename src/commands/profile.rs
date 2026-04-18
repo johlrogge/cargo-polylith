@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use crate::commands::validate::validate_brick_name;
 use crate::commands::CommandError;
 use crate::output::table;
-use crate::workspace::{build_workspace_map, collect_root_interface_deps, discover_profiles, plan_root_demotion, resolve_profile_workspace, resolve_root};
+use crate::workspace::{build_workspace_map, collect_root_interface_deps, detect_orphaned_cargo_profiles, discover_profiles, plan_root_demotion, resolve_profile_workspace, resolve_root};
 
 pub fn list(json: bool, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
@@ -92,6 +92,10 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
         eprintln!("Stripped workspace inheritance from {} brick(s)", stripped_count);
     }
 
+    // Warn if the original root Cargo.toml has [profile.*] sections that will be
+    // overwritten — user should migrate them into their .profile files (issue #7).
+    warn_orphaned_cargo_profiles(&root)?;
+
     // Phase 2: now that Polylith.toml has been written, build the full WorkspaceMap.
     // This second build is intentional and necessary: resolve_profile_workspace needs
     // workspace_package from PolylithToml (which only exists after write_polylith_toml
@@ -150,6 +154,9 @@ pub fn migrate(force: bool, workspace_root: Option<&Path>) -> Result<()> {
 pub fn change_profile(name: &str, workspace_root: Option<&Path>) -> Result<()> {
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
+
+    warn_orphaned_cargo_profiles(&root)?;
+
     let map = build_workspace_map(&root)?;
     let profiles = discover_profiles(&root)?;
     let profile = profiles
@@ -161,6 +168,27 @@ pub fn change_profile(name: &str, workspace_root: Option<&Path>) -> Result<()> {
     let generated = crate::scaffold::write_root_workspace_from_profile(&root, &resolved)?;
     println!("Generated {}", generated.display());
 
+    Ok(())
+}
+
+/// Emit a stderr warning if the root Cargo.toml contains `[profile.*]` sections
+/// that would be lost on the next `change-profile` regeneration. Users should
+/// move these into their `.profile` files instead.
+fn warn_orphaned_cargo_profiles(root: &Path) -> Result<()> {
+    let orphans = detect_orphaned_cargo_profiles(root)?;
+    if !orphans.is_empty() {
+        let names = orphans.iter().map(|n| format!("[profile.{}]", n)).collect::<Vec<_>>().join(", ");
+        eprintln!(
+            "warning: root Cargo.toml contains [profile.*] sections not declared in any .profile:"
+        );
+        eprintln!("  {}", names);
+        eprintln!(
+            "  These will be lost on the next `change-profile`. Move each one into the"
+        );
+        eprintln!(
+            "  corresponding profiles/<name>.profile to preserve it across profile switches."
+        );
+    }
     Ok(())
 }
 

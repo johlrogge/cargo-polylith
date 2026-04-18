@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -122,6 +122,10 @@ pub struct Profile {
     pub implementations: HashMap<String, String>,
     /// Maps dep key → feature/version overrides for library deps.
     pub libraries: HashMap<String, ExternalDepInfo>,
+    /// `[profile.*]` sections to pass through into the generated root `Cargo.toml`.
+    /// Keyed by Cargo profile name (e.g. "release", "dev"). Not serialized — derived at parse time.
+    #[serde(skip)]
+    pub profiles: BTreeMap<String, toml_edit::Table>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -186,4 +190,6 @@ pub struct ResolvedProfileWorkspace {
     pub library_dep_lines: Vec<String>,
     /// Shared package metadata from root `Cargo.toml` `[package]`, if present.
     pub workspace_package: Option<WorkspacePackageMeta>,
+    /// Rendered `[profile.*]` sections from the `.profile` file, ready to append verbatim.
+    pub cargo_profile_sections: Vec<String>,
 }
