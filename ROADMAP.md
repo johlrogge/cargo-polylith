@@ -2,6 +2,13 @@
 
 ## Shipped
 
+### 0.13.0 — `polylith_status` old-model profile hint ✅
+
+- `polylith_status` now detects pre-0.11 profile directories (`profiles/<name>/Cargo.toml`)
+  and emits a migration suggestion recommending `cargo polylith change-profile <name>`.
+  Users upgrading from the old directory-per-profile layout get a clear, actionable hint
+  rather than silent confusion.
+
 ### 0.12.0 — MCP `polylith_change_profile` write tool ✅
 
 - `polylith_change_profile` added to the MCP write tool set (enabled with `--write`).

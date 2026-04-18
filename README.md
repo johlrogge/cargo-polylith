@@ -594,7 +594,7 @@ Communicates over stdin/stdout using the standard MCP JSON-RPC transport.
 | `polylith_info` | Workspace summary — components, bases, and projects |
 | `polylith_deps` | Dependency graph, optionally filtered by brick name |
 | `polylith_check` | Violations and warnings |
-| `polylith_status` | Structural health summary |
+| `polylith_status` | Structural health summary; detects pre-0.11 profile directories (`profiles/<name>/Cargo.toml`) and suggests `cargo polylith change-profile <name>` to migrate |
 | `polylith_profile_list` | List all profiles and their implementation selections |
 
 **Write tools (enabled with `--write`):**

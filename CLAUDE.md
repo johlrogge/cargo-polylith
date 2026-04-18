@@ -76,6 +76,12 @@ The tool must work even when the user's workspace doesn't fully compile.
 - `~/projects/modular-digital-music-array` — real-world target (27 components, 11 bases) for `deps` and `info`
 - `tests/fixtures/` — minimal hand-crafted polylith workspace for unit/integration tests
 
+## MCP Tool Preference
+
+Prefer MCP tools (rust-codebase, git-read, git-write, gh-issues, git-flow, just, etc.) over Bash for any operation that has an MCP equivalent.
+Do not silently fall back to Bash when an MCP tool seems unavailable — surface the gap to the user instead of working around it.
+If Bash is the only fit (no MCP covers the operation), it is acceptable, but that should be rare.
+
 ## Agents
 
 - **architect** — reviews code and architecture; read-only, advises only. Use `/architect` skill.
