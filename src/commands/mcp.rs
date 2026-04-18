@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::commands::validate::validate_brick_name;
 use crate::scaffold;
-use crate::workspace::{build_workspace_map, classify_dep, discover_profiles, resolve_root, run_checks, run_status, DepKind};
+use crate::workspace::{build_workspace_map, classify_dep, discover_profiles, read_polylith_workspace_package, resolve_root, run_checks, run_status, DepKind};
 use crate::commands::bump as bump_cmd;
 
 /// Process a single JSON-RPC line and return the response value, or `None` if
@@ -516,8 +516,12 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
         }
 
         "polylith_migrate_package_meta" => {
-            match scaffold::migrate_package_meta_to_cargo_toml(root) {
-                Ok(msg) => Ok(msg),
+            match read_polylith_workspace_package(root) {
+                Ok(None) => Ok("nothing to migrate: no [workspace.package] in Polylith.toml".to_string()),
+                Ok(Some(ws_pkg)) => match scaffold::migrate_package_meta_to_cargo_toml(root, ws_pkg) {
+                    Ok(msg) => Ok(msg),
+                    Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
+                },
                 Err(e) => Err(jsonrpc_error(id.clone(), -32000, format!("{e:#}"))),
             }
         }

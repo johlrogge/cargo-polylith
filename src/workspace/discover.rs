@@ -191,7 +191,36 @@ pub fn build_workspace_map(root: &Path) -> Result<WorkspaceMap> {
     Ok(map)
 }
 
+/// Extract a `WorkspacePackageMeta` from a `[package]` or `[workspace.package]` item.
+///
+/// Distinguishes "key absent" (`None`) from "key present, possibly empty" (`Some(_)`)
+/// for the `authors` array. All other fields are extracted as `Option<String>` and are
+/// `None` when absent.
+fn extract_package_meta(pkg: &toml_edit::Item) -> WorkspacePackageMeta {
+    let version = pkg.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let edition = pkg.get("edition").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let authors_present = pkg.get("authors").is_some();
+    let authors: Vec<String> = pkg
+        .get("authors")
+        .and_then(|v| v.as_value())
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    let authors = if authors_present { Some(authors) } else { None };
+    let license = pkg.get("license").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let repository = pkg.get("repository").and_then(|v| v.as_str()).map(|s| s.to_string());
+    WorkspacePackageMeta { version, edition, authors, license, repository }
+}
+
 /// Read package metadata from root `Cargo.toml` `[package]` section.
+///
+/// Returns `Ok(None)` if the section is absent **or** if the section is present
+/// but contains no recognised fields (version, edition, authors, license, repository).
+/// An empty `[package]` therefore returns `Ok(None)`.
+///
+/// **Note**: Unlike [`read_polylith_workspace_package`], this returns `Ok(None)`
+/// when the section exists but has no recognised fields. The rationale is that an
+/// empty `[package]` in a root Cargo.toml carries no useful metadata to propagate.
 pub fn read_root_package_meta(root: &Path) -> Result<Option<WorkspacePackageMeta>> {
     let toml_path = root.join("Cargo.toml");
     if !toml_path.exists() {
@@ -212,25 +241,40 @@ pub fn read_root_package_meta(root: &Path) -> Result<Option<WorkspacePackageMeta
         return Ok(None);
     };
 
-    let version = pkg.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let edition = pkg.get("edition").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let authors: Vec<String> = pkg
-        .get("authors")
-        .and_then(|v| v.as_value())
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-    let license = pkg.get("license").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let repository = pkg.get("repository").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let meta = extract_package_meta(pkg);
+    let has_meta = meta.version.is_some() || meta.edition.is_some() || meta.authors.is_some()
+        || meta.license.is_some() || meta.repository.is_some();
 
-    let has_meta = version.is_some() || edition.is_some() || !authors.is_empty()
-        || license.is_some() || repository.is_some();
+    if has_meta { Ok(Some(meta)) } else { Ok(None) }
+}
 
-    if has_meta {
-        Ok(Some(WorkspacePackageMeta { version, edition, authors, license, repository }))
-    } else {
-        Ok(None)
+/// Read `[workspace.package]` from `Polylith.toml` at the given root.
+///
+/// Returns `Err` if `Polylith.toml` is missing or malformed, `Ok(None)` if
+/// the file is present but has no `[workspace.package]` section, and
+/// `Ok(Some(meta))` otherwise.
+///
+/// **Note**: Unlike [`read_root_package_meta`], this returns `Ok(Some(...))`
+/// whenever the `[workspace.package]` section exists, even with no recognised
+/// fields. This is intentional: callers (e.g. migrate) need to know the
+/// section was present so they can remove it.
+pub fn read_polylith_workspace_package(root: &Path) -> Result<Option<WorkspacePackageMeta>> {
+    let path = root.join("Polylith.toml");
+    if !path.exists() {
+        return Err(WorkspaceError::Other(format!(
+            "Polylith.toml not found at {}",
+            root.display()
+        )));
     }
+    let content = fs::read_to_string(&path).map_err(io_err(&path))?;
+    let doc: toml_edit::DocumentMut = content.parse().map_err(parse_err(&path))?;
+
+    let ws_pkg = match doc.get("workspace").and_then(|w| w.get("package")) {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    Ok(Some(extract_package_meta(ws_pkg)))
 }
 
 /// Read `Polylith.toml` from the given root directory, returning an error if not present.
@@ -289,44 +333,14 @@ pub fn plan_root_demotion(root: &Path) -> Result<RootDemotionPlan> {
         .map_err(parse_err(&manifest_path))?;
 
     // Extract [workspace.package] fields
-    let version = doc
+    let workspace_package = if let Some(ws_pkg) = doc
         .get("workspace")
         .and_then(|w| w.get("package"))
-        .and_then(|p| p.get("version"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let edition = doc
-        .get("workspace")
-        .and_then(|w| w.get("package"))
-        .and_then(|p| p.get("edition"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let authors: Vec<String> = doc
-        .get("workspace")
-        .and_then(|w| w.get("package"))
-        .and_then(|p| p.get("authors"))
-        .and_then(|v| v.as_value())
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
-        .unwrap_or_default();
-    let license = doc
-        .get("workspace")
-        .and_then(|w| w.get("package"))
-        .and_then(|p| p.get("license"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let repository = doc
-        .get("workspace")
-        .and_then(|w| w.get("package"))
-        .and_then(|p| p.get("repository"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-
-    let has_package_meta = version.is_some() || edition.is_some() || !authors.is_empty()
-        || license.is_some() || repository.is_some();
-
-    let workspace_package = if has_package_meta {
-        Some(WorkspacePackageMeta { version, edition, authors, license, repository })
+    {
+        let meta = extract_package_meta(ws_pkg);
+        let has_package_meta = meta.version.is_some() || meta.edition.is_some()
+            || meta.authors.is_some() || meta.license.is_some() || meta.repository.is_some();
+        if has_package_meta { Some(meta) } else { None }
     } else {
         None
     };
@@ -1336,5 +1350,88 @@ mod tests {
         let result = parse_polylith_toml(dir.path()).unwrap().unwrap();
         assert!(result.versioning_policy.is_none());
         assert_eq!(result.workspace_version.as_deref(), Some("0.5.0"));
+    }
+
+    // --- read_polylith_workspace_package tests ---
+
+    /// Missing Polylith.toml returns Err mentioning "Polylith.toml".
+    #[test]
+    fn read_polylith_workspace_package_missing_file_returns_err() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let result = read_polylith_workspace_package(dir.path());
+        assert!(result.is_err(), "expected Err when Polylith.toml is absent");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Polylith.toml"),
+            "error should mention Polylith.toml: {err_msg}"
+        );
+    }
+
+    /// Polylith.toml present but no [workspace.package] section → Ok(None).
+    #[test]
+    fn read_polylith_workspace_package_no_section_returns_none() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nname = \"x\"\n",
+        ).unwrap();
+        let result = read_polylith_workspace_package(dir.path()).unwrap();
+        assert!(result.is_none(), "expected None when [workspace.package] is absent");
+    }
+
+    /// [workspace.package] with all recognised fields → Ok(Some(meta)) with each field set.
+    #[test]
+    fn read_polylith_workspace_package_reads_all_fields() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nname = \"x\"\n\n[workspace.package]\nversion = \"1.2.3\"\nedition = \"2021\"\nauthors = [\"a\", \"b\"]\nlicense = \"MIT\"\nrepository = \"https://example.com\"\n",
+        ).unwrap();
+        let meta = read_polylith_workspace_package(dir.path()).unwrap().unwrap();
+        assert_eq!(meta.version.as_deref(), Some("1.2.3"));
+        assert_eq!(meta.edition.as_deref(), Some("2021"));
+        assert_eq!(meta.authors, Some(vec!["a".to_string(), "b".to_string()]));
+        assert_eq!(meta.license.as_deref(), Some("MIT"));
+        assert_eq!(meta.repository.as_deref(), Some("https://example.com"));
+    }
+
+    /// [workspace.package] with only version (no authors key) → authors is None.
+    #[test]
+    fn read_polylith_workspace_package_authors_absent_is_none() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nname = \"x\"\n\n[workspace.package]\nversion = \"1.0.0\"\n",
+        ).unwrap();
+        let meta = read_polylith_workspace_package(dir.path()).unwrap().unwrap();
+        assert_eq!(meta.authors, None, "absent authors key should yield None");
+    }
+
+    /// [workspace.package].authors = [] (explicit empty) → authors is Some(vec![]).
+    ///
+    /// This is the pivotal test that proves the type shape carries the distinction
+    /// between "key absent" and "key present but empty".
+    #[test]
+    fn read_polylith_workspace_package_authors_explicit_empty_is_some_empty() {
+        use tempfile::TempDir;
+        use std::fs;
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("Polylith.toml"),
+            "[workspace]\nname = \"x\"\n\n[workspace.package]\nauthors = []\n",
+        ).unwrap();
+        let meta = read_polylith_workspace_package(dir.path()).unwrap().unwrap();
+        assert_eq!(
+            meta.authors,
+            Some(vec![]),
+            "explicit empty authors array should yield Some(vec![])"
+        );
     }
 }
