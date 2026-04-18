@@ -132,10 +132,8 @@ fn run_loop(
                                 app.pending_g = true;
                             }
                         }
-                        KeyCode::Char('G') => {
-                            if !app.grid.rows.is_empty() {
-                                app.cursor_row = app.grid.rows.len() - 1;
-                            }
+                        KeyCode::Char('G') if !app.grid.rows.is_empty() => {
+                            app.cursor_row = app.grid.rows.len() - 1;
                         }
                         KeyCode::Char('i') => app.start_edit_interface(),
                         KeyCode::Char('f') => { app.toggle_fold(); }
