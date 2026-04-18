@@ -608,6 +608,7 @@ Communicates over stdin/stdout using the standard MCP JSON-RPC transport.
 | `polylith_component_update` | Update a component's interface annotation |
 | `polylith_profile_new` | Create a new empty profile file |
 | `polylith_profile_add` | Add or update an implementation selection in a profile |
+| `polylith_change_profile` | Regenerate root `Cargo.toml` from a named profile; `name` required |
 | `polylith_bump` | Bump the workspace version in `Polylith.toml`; `level` (`major`, `minor`, `patch`) required in relaxed mode, auto-detected in strict mode; accepts `dry_run: true` |
 | `polylith_migrate_package_meta` | Overwrite root `Cargo.toml [package]` fields with values from `Polylith.toml [workspace.package]`, then remove `[workspace.package]` from `Polylith.toml`. Fields present in `Polylith.toml` overwrite existing values in `Cargo.toml`; fields absent from `Polylith.toml` are left untouched. |
 
