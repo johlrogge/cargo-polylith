@@ -2,3 +2,5 @@
 .devenv/
 .devenv.flake.nix
 devenv.lock
+.claude/
+.mcp.json
