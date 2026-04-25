@@ -355,6 +355,261 @@ fn strict_bump_no_tag_first_release() {
         .stderr(predicate::str::contains("no previous release tag"));
 }
 
+/// Set up a minimal relaxed-mode polylith workspace inside a git repo,
+/// with an initial commit so files are tracked and clean.
+fn setup_relaxed_workspace_with_git(initial_version: &str) -> TempDir {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "test@example.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+
+    fs::write(
+        root.join("Polylith.toml"),
+        format!(
+            "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"relaxed\"\nversion = \"{initial_version}\"\n"
+        ),
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "initial commit"]);
+
+    dir
+}
+
+#[test]
+fn bump_refuses_when_polylith_toml_is_dirty() {
+    let dir = setup_relaxed_workspace_with_git("1.0.0");
+    let root = dir.path();
+
+    // Simulate a partial prior bump: write a different version directly to Polylith.toml
+    // without committing (making it dirty).
+    fs::write(
+        root.join("Polylith.toml"),
+        "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"relaxed\"\nversion = \"1.1.0\"\n",
+    )
+    .unwrap();
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            root.to_str().unwrap(),
+            "bump",
+            "minor",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("refusing to bump")
+                .and(predicate::str::contains("Polylith.toml"))
+                .and(predicate::str::contains("--allow-dirty")),
+        );
+
+    // Version on disk should be the dirty pre-state (1.1.0), not bumped further.
+    let content = fs::read_to_string(root.join("Polylith.toml")).unwrap();
+    assert!(
+        content.contains("1.1.0"),
+        "version should remain at dirty pre-state 1.1.0, got: {content}"
+    );
+}
+
+#[test]
+fn bump_refuses_when_root_cargo_toml_is_dirty() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "test@example.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n\n[workspace.package]\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("Polylith.toml"),
+        "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"relaxed\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "initial commit"]);
+
+    // Make Cargo.toml dirty (unstaged modification)
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n\n[workspace.package]\nversion = \"1.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            root.to_str().unwrap(),
+            "bump",
+            "minor",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("refusing to bump")
+                .and(predicate::str::contains("Cargo.toml")),
+        );
+
+    // Versions on disk should remain at the pre-bump state — bump was refused.
+    let polylith_content = fs::read_to_string(root.join("Polylith.toml")).unwrap();
+    assert!(
+        polylith_content.contains("1.0.0"),
+        "Polylith.toml version should remain at 1.0.0 after refused bump, got: {polylith_content}"
+    );
+    let cargo_content = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(
+        cargo_content.contains("1.1.0"),
+        "Cargo.toml should still contain the dirty pre-bump version 1.1.0, got: {cargo_content}"
+    );
+}
+
+#[test]
+fn bump_succeeds_when_cargo_toml_is_dirty_without_workspace_package() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "test@example.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    // Cargo.toml with NO [workspace.package] — only the workspace members list.
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("Polylith.toml"),
+        "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"relaxed\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "initial commit"]);
+
+    // Make Cargo.toml dirty (unstaged modification), even though it has no [workspace.package].
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"components/new\"]\nresolver = \"2\"\n",
+    )
+    .unwrap();
+
+    // The bump should SUCCEED — dirty Cargo.toml without [workspace.package] is not a concern.
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            root.to_str().unwrap(),
+            "bump",
+            "patch",
+        ])
+        .assert()
+        .success();
+
+    // Polylith.toml should have been bumped.
+    assert_eq!(read_polylith_version(&dir), "1.0.1");
+}
+
+#[test]
+fn bump_succeeds_with_allow_dirty_override() {
+    let dir = setup_relaxed_workspace_with_git("1.0.0");
+    let root = dir.path();
+
+    // Make Polylith.toml dirty at version 1.1.0 (simulating partial prior bump)
+    fs::write(
+        root.join("Polylith.toml"),
+        "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"relaxed\"\nversion = \"1.1.0\"\n",
+    )
+    .unwrap();
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            root.to_str().unwrap(),
+            "bump",
+            "minor",
+            "--allow-dirty",
+        ])
+        .assert()
+        .success();
+
+    // Should have bumped from the dirty current value (1.1.0 -> 1.2.0)
+    assert_eq!(read_polylith_version(&dir), "1.2.0");
+}
+
+#[test]
+fn bump_succeeds_on_clean_committed_workspace() {
+    let dir = setup_relaxed_workspace_with_git("0.3.0");
+    let root = dir.path();
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            root.to_str().unwrap(),
+            "bump",
+            "patch",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(read_polylith_version(&dir), "0.3.1");
+}
+
+#[test]
+fn bump_succeeds_when_polylith_toml_is_untracked() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    // git init but never add/commit
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "test@example.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = []\nresolver = \"2\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("Polylith.toml"),
+        "[workspace]\nschema_version = 1\n\n[versioning]\npolicy = \"relaxed\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    // Deliberately do NOT git add — files are untracked
+
+    cargo_polylith()
+        .args([
+            "polylith",
+            "--workspace-root",
+            root.to_str().unwrap(),
+            "bump",
+            "patch",
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(read_polylith_version(&dir), "0.1.1");
+}
+
 #[test]
 fn strict_bump_dry_run_shows_recommendations() {
     let dir = setup_strict_workspace_with_git("0.1.0");

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use crate::scaffold;
 use crate::workspace::{
     build_workspace_map, compute_bumped_version, model::VersioningPolicy, resolve_root,
+    root_cargo_toml_has_workspace_package,
     strict_bump::{analyze_brick_changes, compute_project_recommendations, ProjectBumpRecommendation},
     BumpLevel,
 };
@@ -32,7 +33,8 @@ pub enum BumpResult {
 /// - If policy is `relaxed`: `level_str` is required.
 /// - If policy is `strict`: analysis is automatic; `level_str` is ignored.
 /// - `dry_run`: ignored for strict mode (strict is always analysis-only); relaxed always writes.
-pub fn run(level_str: Option<&str>, workspace_root: Option<&Path>, dry_run: bool) -> Result<BumpResult> {
+/// - `allow_dirty`: when false, refuse to bump if target files have uncommitted changes.
+pub fn run(level_str: Option<&str>, workspace_root: Option<&Path>, dry_run: bool, allow_dirty: bool) -> Result<BumpResult> {
     let cwd = env::current_dir()?;
     let root = resolve_root(&cwd, workspace_root)?;
     let map = build_workspace_map(&root)?;
@@ -45,10 +47,10 @@ pub fn run(level_str: Option<&str>, workspace_root: Option<&Path>, dry_run: bool
 
     match polylith_toml.versioning_policy {
         Some(VersioningPolicy::Relaxed) => {
-            run_relaxed(level_str, &root, &map)
+            run_relaxed(level_str, &root, &map, allow_dirty)
         }
         Some(VersioningPolicy::Strict) => {
-            run_strict(&root, &map, dry_run)
+            run_strict(&root, &map, dry_run, allow_dirty)
         }
         None => {
             anyhow::bail!("versioning not configured in Polylith.toml — add a [versioning] section with policy = \"relaxed\"");
@@ -56,10 +58,12 @@ pub fn run(level_str: Option<&str>, workspace_root: Option<&Path>, dry_run: bool
     }
 }
 
+
 fn run_relaxed(
     level_str: Option<&str>,
     root: &Path,
     map: &crate::workspace::WorkspaceMap,
+    allow_dirty: bool,
 ) -> Result<BumpResult> {
     let level_str = level_str.context(
         "bump level required in relaxed mode — run `cargo polylith bump <major|minor|patch>`",
@@ -81,6 +85,25 @@ fn run_relaxed(
     let new_version = compute_bumped_version(&current_version, level)?;
     let new_version_str = new_version.to_string();
 
+    // Refuse if target files have uncommitted modifications (unless --allow-dirty).
+    if !allow_dirty {
+        let mut dirty: Vec<&'static str> = Vec::new();
+        if git::is_path_dirty(root, "Polylith.toml")? {
+            dirty.push("Polylith.toml");
+        }
+        if root_cargo_toml_has_workspace_package(root)?
+            && git::is_path_dirty(root, "Cargo.toml")?
+        {
+            dirty.push("Cargo.toml");
+        }
+        if !dirty.is_empty() {
+            anyhow::bail!(
+                "refusing to bump: uncommitted changes in {} — commit or stash, or pass --allow-dirty",
+                dirty.join(", ")
+            );
+        }
+    }
+
     // Write to Polylith.toml.
     scaffold::write_polylith_version(root, &new_version_str)
         .with_context(|| "failed to write new version to Polylith.toml")?;
@@ -99,6 +122,7 @@ fn run_strict(
     root: &Path,
     map: &crate::workspace::WorkspaceMap,
     _dry_run: bool,
+    _allow_dirty: bool,
 ) -> Result<BumpResult> {
     let polylith_toml = map.polylith_toml.as_ref().unwrap();
     let tag_prefix = polylith_toml.tag_prefix.as_deref().unwrap_or("v");
