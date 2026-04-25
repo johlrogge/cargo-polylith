@@ -10,7 +10,7 @@ pub mod version;
 
 #[allow(unused_imports)]
 pub use check::{check_profile, run_checks, run_version_checks, VersionEnforcement};
-pub use discover::{build_workspace_map, collect_root_interface_deps, detect_orphaned_cargo_profiles, discover_profiles, plan_root_demotion, read_polylith_toml, read_polylith_workspace_package, resolve_profile_workspace, resolve_root};
+pub use discover::{build_workspace_map, collect_root_interface_deps, detect_orphaned_cargo_profiles, discover_profiles, plan_root_demotion, read_polylith_toml, read_polylith_workspace_package, resolve_profile_workspace, resolve_root, root_cargo_toml_has_workspace_package};
 // Re-exported so callers can match on specific workspace errors without
 // reaching into the internal `error` module.
 #[allow(unused_imports)]

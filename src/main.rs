@@ -45,10 +45,10 @@ fn main() {
                 ProjectAction::New { name } => commands::project::new(&name, workspace_root),
             }
         }
-        PolylithCommand::Bump { level, dry_run } => {
+        PolylithCommand::Bump { level, dry_run, allow_dirty } => {
             use commands::bump::BumpResult;
             use output::table::{print_strict_bump_report};
-            commands::bump::run(level.as_deref(), workspace_root, dry_run).map(|result| {
+            commands::bump::run(level.as_deref(), workspace_root, dry_run, allow_dirty).map(|result| {
                 match result {
                     BumpResult::Relaxed { old, new } => {
                         println!("bumped workspace version: {old} \u{2192} {new}");
