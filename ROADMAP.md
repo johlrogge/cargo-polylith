@@ -2,6 +2,17 @@
 
 ## Shipped
 
+### 0.14.1 — `polylith bump` refuses to over-bump dirty trees ✅
+
+- `cargo polylith bump` now refuses to run in relaxed mode when `Polylith.toml`
+  or root `Cargo.toml` (with `[workspace.package]`) has uncommitted modifications.
+  Prevents the over-bump that occurred when a prior partial bump left the
+  source-of-truth file already incremented; the next bump used to read that
+  already-bumped value as "current" and increment again.
+- New `--allow-dirty` flag (also exposed on the `polylith_bump` MCP tool) bypasses
+  the check for cases where the user has intentionally edited the version file.
+  Untracked files and non-git workspaces are unaffected.
+
 ### 0.14.0 — `.profile` files carry `[profile.*]` settings ✅
 
 - `.profile` files now accept `[profile.release]`, `[profile.dev]`, `[profile.bench]`,
