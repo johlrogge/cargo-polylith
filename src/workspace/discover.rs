@@ -297,6 +297,20 @@ pub fn read_polylith_toml(root: &Path) -> Result<PolylithToml> {
 /// to strip workspace inheritance from bricks. Building the full `WorkspaceMap` would scan
 /// all components/bases/projects unnecessarily.
 ///
+/// Returns `true` if the root `Cargo.toml` exists and contains a `[workspace.package]` section.
+///
+/// Returns `Ok(false)` if `Cargo.toml` does not exist.
+/// Returns `Err` only on I/O or parse failure.
+pub fn root_cargo_toml_has_workspace_package(root: &Path) -> Result<bool> {
+    let toml_path = root.join("Cargo.toml");
+    if !toml_path.exists() {
+        return Ok(false);
+    }
+    let content = fs::read_to_string(&toml_path).map_err(io_err(&toml_path))?;
+    let doc: toml_edit::DocumentMut = content.parse().map_err(parse_err(&toml_path))?;
+    Ok(doc.get("workspace").and_then(|ws| ws.get("package")).is_some())
+}
+
 /// Returns a map of dep key → `WorkspacePathDep` for every path dep found in
 /// `[workspace.dependencies]`.
 pub fn collect_root_interface_deps(root: &Path) -> Result<std::collections::HashMap<String, WorkspacePathDep>> {

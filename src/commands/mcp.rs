@@ -223,6 +223,10 @@ fn tools_list(id: Value, write: bool) -> Value {
                         "dry_run": {
                             "type": "boolean",
                             "description": "Show recommendations without writing changes (strict mode only)"
+                        },
+                        "allow_dirty": {
+                            "type": "boolean",
+                            "description": "Bypass the safety check that prevents over-bumping after a partial prior bump. Only set true if you have intentionally modified Polylith.toml or Cargo.toml and want to bump from that modified state."
                         }
                     }
                 }
@@ -568,7 +572,8 @@ fn tools_call(id: Value, req: &Value, root: &Path, write: bool) -> Value {
         "polylith_bump" => {
             let level = arguments.get("level").and_then(|v| v.as_str());
             let dry_run = arguments.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-            match bump_cmd::run(level, Some(root), dry_run) {
+            let allow_dirty = arguments.get("allow_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+            match bump_cmd::run(level, Some(root), dry_run, allow_dirty) {
                 Ok(bump_cmd::BumpResult::Relaxed { old, new }) => {
                     Ok(format!("bumped workspace version: {old} -> {new}"))
                 }

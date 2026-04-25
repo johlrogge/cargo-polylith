@@ -98,6 +98,9 @@ pub enum PolylithCommand {
         /// Show recommendations without writing changes
         #[arg(long)]
         dry_run: bool,
+        /// Bump even if Polylith.toml or Cargo.toml have uncommitted changes
+        #[arg(long)]
+        allow_dirty: bool,
     },
     /// Run a cargo command against a generated profile workspace
     Cargo {
